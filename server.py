@@ -10,7 +10,7 @@ from typing import Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, Header, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from jose import jwt, JWTError
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -23,6 +23,7 @@ MONGO_URI = os.getenv("MONGO_URI", "")
 CESIUM_ION_TOKEN = os.getenv("CESIUM_ION_TOKEN", "")
 CESIUM_ION_ADMIN_TOKEN = os.getenv("CESIUM_ION_ADMIN_TOKEN", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
 
 app = FastAPI(title="World Game API", version="1.0.0")
 app.mount("/static", StaticFiles(directory=os.path.join(APP_DIR, "static")), name="static")
@@ -297,6 +298,24 @@ async def weather(lat: float, lon: float):
             return r.json()
         except Exception as exc:
             raise HTTPException(502, f"Не удалось получить погоду: {exc}")
+
+@app.get("/api/weather-tiles/{z}/{x}/{y}.png")
+async def weather_tile(z: int, x: int, y: int):
+    if not OPENWEATHER_API_KEY:
+        raise HTTPException(503, "Добавьте OPENWEATHER_API_KEY в Render для погодного слоя.")
+    if not (0 <= z <= 18 and 0 <= x < 2 ** z and 0 <= y < 2 ** z):
+        raise HTTPException(400, "Недопустимые координаты тайла.")
+    url = "https://tile.openweathermap.org/map/precipitation_new/%d/%d/%d.png" % (z, x, y)
+    async with httpx.AsyncClient(timeout=12) as client:
+        try:
+            r = await client.get(url, params={"appid": OPENWEATHER_API_KEY})
+            if r.status_code != 200:
+                raise HTTPException(502, "OpenWeather не вернул тайл. Проверьте API-ключ и доступ к картам.")
+            return Response(content=r.content, media_type="image/png", headers={"Cache-Control": "public, max-age=300"})
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(502, "OpenWeather недоступен: " + str(exc))
 
 @app.post("/api/cesium/token")
 async def create_cesium_token(request: Request, user=Depends(current_user)):
