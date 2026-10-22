@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: world-game
+    runtime: python
+    plan: free
+    region: frankfurt
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: MONGO_URI
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: CESIUM_ION_TOKEN
+        sync: false
+      - key: CESIUM_ION_ADMIN_TOKEN
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
