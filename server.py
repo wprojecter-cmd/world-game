@@ -288,16 +288,32 @@ async def invite(payload: InvitePayload, user=Depends(current_user)):
 
 @app.get("/api/weather")
 async def weather(lat: float, lon: float):
-    async with httpx.AsyncClient(timeout=10) as client:
+    lat = max(-90, min(90, lat))
+    lon = max(-180, min(180, lon))
+    errors = []
+    async with httpx.AsyncClient(timeout=12, follow_redirects=True, headers={"User-Agent": "WorldGame/1.0 weather dashboard"}) as client:
         try:
-            r = await client.get("https://api.open-meteo.com/v1/forecast", params={
-                "latitude": max(-90,min(90,lat)), "longitude": max(-180,min(180,lon)),
-                "current": "temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m,wind_direction_10m",
-                "timezone": "auto"})
+            r = await client.get("https://api.open-meteo.com/v1/forecast", params={"latitude": lat, "longitude": lon, "current": "temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m,wind_direction_10m", "timezone": "auto"})
             r.raise_for_status()
             return r.json()
         except Exception as exc:
-            raise HTTPException(502, f"Не удалось получить погоду: {exc}")
+            errors.append("Open-Meteo: " + str(exc))
+        try:
+            r = await client.get(f"https://wttr.in/{lat:.4f},{lon:.4f}", params={"format": "j1"})
+            r.raise_for_status()
+            payload = r.json()
+            current = (payload.get("current_condition") or [{}])[0]
+            def num(value, default=0):
+                try: return float(value)
+                except (TypeError, ValueError): return default
+            temp = num(current.get("temp_C"))
+            code = str(current.get("weatherCode", ""))
+            code_map = {"113":0,"116":2,"119":3,"122":3,"143":45,"248":45,"263":51,"296":61,"302":61,"308":61,"326":71,"332":71,"338":71,"389":95}
+            return {"current": {"temperature_2m": temp, "relative_humidity_2m": num(current.get("humidity")), "apparent_temperature": num(current.get("FeelsLikeC"), temp), "is_day": 1, "precipitation": num(current.get("precipMM")), "weather_code": code_map.get(code, 2), "wind_speed_10m": num(current.get("windspeedKmph")), "wind_direction_10m": num(current.get("winddirDegree"))}, "timezone": "local"}
+        except Exception as exc:
+            errors.append("wttr.in: " + str(exc))
+    print("Weather providers unavailable:", " | ".join(errors))
+    return JSONResponse(status_code=200, content={"current": None, "unavailable": True, "message": "Погода временно недоступна для этой точки."})
 
 @app.get("/api/weather-tiles/{z}/{x}/{y}.png")
 async def weather_tile(z: int, x: int, y: int):
