@@ -4,6 +4,7 @@ import secrets
 import hashlib
 import hmac
 import time
+import random
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -30,6 +31,7 @@ db = None
 online_sockets: dict[str, WebSocket] = {}
 socket_users: dict[str, dict] = {}
 socket_lock = asyncio.Lock()
+ai_task = None
 
 class AuthPayload(BaseModel):
     username: str = Field(min_length=3, max_length=24, pattern=r"^[A-Za-z0-9_]+$")
@@ -107,13 +109,51 @@ async def startup():
             await db.countries.create_index("country_code", unique=True)
             await db.players.create_index("user_id", unique=True)
             await db.ai_countries.create_index("country_code", unique=True)
+            ai_seed = [
+                ("JP", "Япония", 36.2, 138.2), ("AU", "Австралия", -25.3, 133.8),
+                ("BR", "Бразилия", -10.8, -52.9), ("NO", "Норвегия", 60.5, 8.5),
+                ("EG", "Египет", 26.8, 30.8), ("IN", "Индия", 21.1, 78.0),
+                ("CA", "Канада", 56.1, -106.3), ("ZA", "ЮАР", -30.6, 22.9),
+                ("NZ", "Новая Зеландия", -40.9, 174.9), ("AR", "Аргентина", -38.4, -63.6)
+            ]
+            for code, name, lat, lon in ai_seed:
+                await db.ai_countries.update_one({"country_code": code}, {"$setOnInsert": {
+                    "country_code": code, "name": name, "username": "AI · " + name,
+                    "position": {"lat": lat, "lon": lon, "alt": 9000, "heading": 45},
+                    "mode": "aircraft", "aircraft": "airbus-a320", "online": True,
+                    "updated_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+            ai_task = asyncio.create_task(ai_flight_loop())
         except Exception as exc:
             print("MongoDB connection/index setup warning:", exc)
     else:
         print("MONGO_URI is not set; auth and persistent game state are unavailable.")
 
+async def ai_flight_loop():
+    """Move AI aircraft and periodically announce simulated flights."""
+    while True:
+        try:
+            if db is not None:
+                async for ai in db.ai_countries.find({"online": True}):
+                    pos = ai.get("position", {})
+                    lat = max(-80, min(80, float(pos.get("lat", 0)) + random.uniform(-0.3, 0.3)))
+                    lon = ((float(pos.get("lon", 0)) + random.uniform(-0.5, 0.5) + 180) % 360) - 180
+                    heading = (float(pos.get("heading", 45)) + random.uniform(-12, 12)) % 360
+                    new_pos = {"lat": lat, "lon": lon, "alt": random.randint(6500, 11000), "heading": heading}
+                    await db.ai_countries.update_one({"_id": ai["_id"]}, {"$set": {"position": new_pos, "updated_at": datetime.now(timezone.utc).isoformat()}})
+                    if random.random() < 0.12:
+                        await broadcast({"type": "chat", "from": ai.get("username", "AI country"),
+                            "message": "Сообщаем о выполнении виртуального рейса над координатами %.1f°, %.1f°." % (lat, lon)})
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print("AI flight loop warning:", exc)
+        await asyncio.sleep(20)
+
 @app.on_event("shutdown")
 async def shutdown():
+    global ai_task
+    if ai_task:
+        ai_task.cancel()
     if mongo_client:
         mongo_client.close()
 
