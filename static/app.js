@@ -1,6 +1,6 @@
 (()=>{'use strict';
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-let token=localStorage.getItem('wg_token')||'', user=null, authMode='login', viewer=null, borderSource=null, weatherLayer=null, miniMap=null, spawnMap=null, spawnMarker=null, playerEntity=null, playerEntityUri='', remoteEntities={}, remoteModelUris={}, openWeatherEnabled=false; selectedAircraft='airbus-a320', mode='human', destination=null, position={lat:20,lon:0,alt:0,heading:0,pitch:0,roll:0}, socket=null, localStream=null, peer=null, muted=false, clockTimer=null, movementTimer=null;
+let token=localStorage.getItem('wg_token')||'', user=null, authMode='login', viewer=null, borderSource=null, weatherLayer=null, miniMap=null, spawnMap=null, spawnMarker=null, playerEntity=null, playerEntityUri='', remoteEntities={}, remoteModelUris={}, openWeatherEnabled=false, selectedAircraft='airbus-a320', mode='human', destination=null, position={lat:20,lon:0,alt:0,heading:0,pitch:0,roll:0}, socket=null, localStream=null, peer=null, muted=false, clockTimer=null, movementTimer=null;
 const planes=[
 {id:'airbus-a320',name:'Airbus A320 · S7 Airlines',type:'Пассажирский',url:'https://raw.githubusercontent.com/wprojecter-cmd/flight-simulator/main/airbus_a320_s7_airlines.glb'},
 {id:'sr72-darkstar',name:'Lockheed Martin SR-72 Darkstar',type:'Гиперзвуковой',url:'https://raw.githubusercontent.com/wprojecter-cmd/flight-simulator/main/lockheed_martin_sr72_darkstar__topgun_maverick.glb'},
