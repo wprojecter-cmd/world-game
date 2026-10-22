@@ -15,5 +15,7 @@ The repository contains `render.yaml`. In Render choose **New → Blueprint** an
 ## Notes
 - Without a Cesium ion token, the globe uses ellipsoid terrain and public imagery fallback; premium ion terrain requires a valid token.
 - To create restricted per-app Cesium tokens automatically, configure `CESIUM_ION_ADMIN_TOKEN` with a Cesium ion token that has `tokens:write`. Keep it server-side only.
-- Voice uses browser WebRTC and requires microphone permission; HTTPS is required in production.
+- Voice uses browser WebRTC and requires microphone permission; HTTPS is required in production. It is opt-in and attempts to connect online players who have enabled their microphones.
+- AI countries are seeded in MongoDB and their simulated aircraft positions change periodically; Groq generates diplomatic invite responses when configured.
+- The aircraft hangar contains the S7 A320 and SR-72 entries plus additional model entries. Some third-party model URLs may need to be replaced if the hosting source removes them; test the model requests in the browser console.
 - Free Render instances may sleep when idle. Real-time multiplayer needs an always-on service for best results.
