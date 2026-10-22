@@ -99,10 +99,13 @@ async def broadcast(payload: dict, skip: Optional[str] = None):
 
 @app.on_event("startup")
 async def startup():
-    global mongo_client, db
+    global mongo_client, db, ai_task
     if MONGO_URI:
         mongo_client = AsyncIOMotorClient(MONGO_URI, serverSelectionTimeoutMS=8000)
-        db = mongo_client.get_default_database() or mongo_client["world_game"]
+        try:
+            db = mongo_client.get_default_database()
+        except Exception:
+            db = mongo_client["world_game"]
         try:
             await mongo_client.admin.command("ping")
             await db.users.create_index("username_lower", unique=True)
