@@ -70,7 +70,7 @@ def token_for(user: dict) -> str:
     return jwt.encode({"sub": str(user["_id"]), "username": user["username"], "iat": now, "exp": now + 60 * 60 * 24 * 30}, SECRET_KEY, algorithm=ALGORITHM)
 
 async def current_user(authorization: Optional[str] = Header(default=None)) -> dict:
-    if not db:
+    if db is None:
         raise HTTPException(503, "MongoDB не настроена: добавьте MONGO_URI в Render")
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(401, "Требуется вход")
