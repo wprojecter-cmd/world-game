@@ -286,6 +286,27 @@ async def invite(payload: InvitePayload, user=Depends(current_user)):
     await online_sockets[target["_id"]].send_json({"type": "invite", "from": user["username"], "country": user.get("country_code"), "message": payload.message})
     return {"ok": True}
 
+@app.get("/api/imagery/{z}/{y}/{x}")
+async def proxy_satellite_imagery(z: int, y: int, x: int):
+    # Proxy Esri satellite tiles through this origin to avoid browser CORS restrictions.
+    if z < 0 or z > 19:
+        raise HTTPException(status_code=400, detail="Invalid imagery zoom")
+    limit = 2 ** z
+    if x < 0 or y < 0 or x >= limit or y >= limit:
+        raise HTTPException(status_code=400, detail="Invalid imagery tile coordinates")
+    url = f"https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            upstream = await client.get(url)
+            upstream.raise_for_status()
+            content_type = upstream.headers.get("content-type", "image/jpeg")
+            return Response(content=upstream.content, media_type=content_type,
+                            headers={"Cache-Control": "public, max-age=86400"})
+    except Exception as exc:
+        print(f"Satellite tile proxy failed z={z} y={y} x={x}: {exc}")
+        raise HTTPException(status_code=502, detail="Satellite imagery tile temporarily unavailable")
+
+
 @app.get("/api/weather")
 async def weather(lat: float, lon: float):
     lat = max(-90, min(90, lat))
