@@ -22,3 +22,5 @@ services:
         sync: false
       - key: GROQ_API_KEY
         sync: false
+      - key: OPENWEATHER_API_KEY
+        sync: false
