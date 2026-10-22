@@ -336,23 +336,34 @@ async def weather(lat: float, lon: float):
     print("Weather providers unavailable:", " | ".join(errors))
     return JSONResponse(status_code=200, content={"current": None, "unavailable": True, "message": "Погода временно недоступна для этой точки."})
 
+rainviewer_path_cache = {"path": None, "fetched_at": 0.0}
+
 @app.get("/api/weather-tiles/{z}/{x}/{y}.png")
 async def weather_tile(z: int, x: int, y: int):
-    if not OPENWEATHER_API_KEY:
-        raise HTTPException(503, "Добавьте OPENWEATHER_API_KEY в Render для погодного слоя.")
+    global rainviewer_path_cache
     if not (0 <= z <= 18 and 0 <= x < 2 ** z and 0 <= y < 2 ** z):
         raise HTTPException(400, "Недопустимые координаты тайла.")
-    url = "https://tile.openweathermap.org/map/precipitation_new/%d/%d/%d.png" % (z, x, y)
-    async with httpx.AsyncClient(timeout=12) as client:
-        try:
-            r = await client.get(url, params={"appid": OPENWEATHER_API_KEY})
-            if r.status_code != 200:
-                raise HTTPException(502, "OpenWeather не вернул тайл. Проверьте API-ключ и доступ к картам.")
-            return Response(content=r.content, media_type="image/png", headers={"Cache-Control": "public, max-age=300"})
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(502, "OpenWeather недоступен: " + str(exc))
+    try:
+        now = time.monotonic()
+        radar_path = rainviewer_path_cache.get("path")
+        if not radar_path or now - rainviewer_path_cache.get("fetched_at", 0) > 300:
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+                meta = await client.get("https://api.rainviewer.com/public/weather-maps.json")
+                meta.raise_for_status()
+                payload = meta.json()
+                frames = (payload.get("radar", {}).get("nowcast") or []) or (payload.get("radar", {}).get("past") or [])
+                if not frames or not frames[-1].get("path"):
+                    raise RuntimeError("RainViewer не вернул доступные радарные кадры")
+                radar_path = frames[-1]["path"]
+                rainviewer_path_cache = {"path": radar_path, "fetched_at": now}
+        url = f"https://tilecache.rainviewer.com{radar_path}/256/{z}/{x}/{y}/2/1_1.png"
+        async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+            tile = await client.get(url)
+            tile.raise_for_status()
+            return Response(content=tile.content, media_type="image/png", headers={"Cache-Control": "public, max-age=300"})
+    except Exception as exc:
+        print(f"RainViewer weather tile failed z={z} x={x} y={y}: {exc}")
+        raise HTTPException(502, "Радар погоды временно недоступен.")
 
 @app.post("/api/cesium/token")
 async def create_cesium_token(request: Request, user=Depends(current_user)):
@@ -386,17 +397,41 @@ async def ai_invite(user=Depends(current_user)):
     if db is None:
         raise HTTPException(503, "MongoDB не настроена.")
     country = user.get("country_code") or "неизвестной страны"
-    async with httpx.AsyncClient(timeout=20) as client:
-        try:
-            r = await client.post("https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-                json={"model": "llama-3.3-70b-versatile", "messages":[
-                    {"role":"system","content":"Ты дипломатический ИИ-игрок в многопользовательской игре World Game. Отвечай на русском кратко, дружелюбно, от лица одной из свободных стран. Не утверждай, что реальный самолёт или игрок физически существует."},
-                    {"role":"user","content":f"Игрок {user['username']} из страны {country} приглашает тебя на встречу или совместный полёт. Прими или предложи встречу в своей стране. Ответь 1-3 предложениями."}]})
-            r.raise_for_status()
-            return {"reply": r.json()["choices"][0]["message"]["content"]}
-        except Exception as exc:
-            raise HTTPException(502, f"Ошибка Groq API: {exc}")
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    messages = [
+        {"role": "system", "content": "Ты дипломатический ИИ-игрок в многопользовательской игре World Game. Отвечай на русском кратко, дружелюбно, от лица одной из свободных стран. Не утверждай, что реальный самолёт или игрок физически существует."},
+        {"role": "user", "content": f"Игрок {user['username']} из страны {country} приглашает тебя на встречу или совместный полёт. Прими или предложи встречу в своей стране. Ответь 1-3 предложениями."}
+    ]
+    # Groq retires model IDs periodically. Try current and fallback models on model-specific 400/404 errors.
+    models = ["openai/gpt-oss-20b", "llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+    errors = []
+    async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
+        for model in models:
+            try:
+                response = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers=headers,
+                    json={"model": model, "messages": messages, "temperature": 0.7, "max_tokens": 220}
+                )
+                if response.status_code in (400, 404):
+                    errors.append(f"{model}: HTTP {response.status_code}")
+                    continue
+                if response.status_code == 401:
+                    raise HTTPException(503, "Groq отклонил API-ключ. Проверьте GROQ_API_KEY в Render.")
+                response.raise_for_status()
+                data = response.json()
+                reply = data.get("choices", [{}])[0].get("message", {}).get("content")
+                if reply:
+                    return {"reply": reply, "model": model}
+                errors.append(f"{model}: пустой ответ")
+            except HTTPException:
+                raise
+            except httpx.HTTPStatusError as exc:
+                errors.append(f"{model}: HTTP {exc.response.status_code}")
+            except Exception as exc:
+                errors.append(f"{model}: {type(exc).__name__}")
+    print("Groq models unavailable:", "; ".join(errors))
+    raise HTTPException(502, "Groq не смог ответить. Проверьте GROQ_API_KEY и доступные модели в Groq Console.")
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket, token: str = ""):
