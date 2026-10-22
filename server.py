@@ -178,7 +178,7 @@ async def health():
 
 @app.get("/api/config")
 async def public_config():
-    return {"cesiumToken": CESIUM_ION_TOKEN, "cesiumConfigured": bool(CESIUM_ION_TOKEN), "openWeatherConfigured": bool(OPENWEATHER_API_KEY), "voiceEnabled": True}
+    return {"cesiumToken": CESIUM_ION_TOKEN, "cesiumConfigured": bool(CESIUM_ION_TOKEN), "cesiumTokenProvisioning": bool(CESIUM_ION_ADMIN_TOKEN), "openWeatherConfigured": bool(OPENWEATHER_API_KEY), "voiceEnabled": True}
 
 @app.post("/api/auth/register")
 async def register(payload: AuthPayload):
