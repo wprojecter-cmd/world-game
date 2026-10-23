@@ -274,10 +274,12 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
     if cached and now - cached["time"] < 900:
         return cached["data"]
 
+    # Ask for all mapped highway classes first; rural roads and local streets
+    # are not consistently tagged with the narrower list used by older versions.
     query = (
         f'[out:json][timeout:25];'
         f'way(around:{radius},{lat:.6f},{lon:.6f})'
-        f'[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|road)$"];'
+        f'[highway][highway!~"^(footway|path|steps|pedestrian|cycleway|bridleway|corridor|elevator|proposed|construction)$"];'
         f'out tags geom;'
     )
     # Public Overpass instances sometimes throttle or temporarily fail. Try alternatives.
@@ -331,7 +333,7 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
 
     print(f"All Overpass endpoints failed near {lat:.3f},{lon:.3f}: {' | '.join(errors)}")
     # Return an empty, valid response so traffic can gracefully remain disabled.
-    return {"ways": [], "count": 0, "source": "OpenStreetMap", "unavailable": True}
+    return {"ways": [], "count": 0, "source": "OpenStreetMap", "unavailable": True, "errors": errors}
 
 @app.get("/api/players")
 async def players(user=Depends(current_user)):
