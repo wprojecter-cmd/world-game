@@ -8,7 +8,6 @@ import random
 import json
 import struct
 import math
-import math
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -263,7 +262,6 @@ async def release_country(user=Depends(current_user)):
 
 
 road_response_cache = {}
-road_tile_cache = {}
 
 @app.get("/api/roads")
 async def road_network(lat: float, lon: float, radius: int = 1200):
@@ -385,7 +383,7 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
         result["stale"] = True
         return result
 
-    print(f"All Overpass endpoints failed near {lat:.3f},{lon:.3f}: {' | '.join(errors)}")
+    print(f"All road sources failed near {lat:.3f},{lon:.3f}: {' | '.join(errors)}")
     # Return an empty, valid response so traffic can gracefully remain disabled.
     return {"ways": [], "count": 0, "source": "OpenStreetMap", "unavailable": True, "errors": errors, "searched_radius": radius, "coordinates": {"lat": lat, "lon": lon}}
 
