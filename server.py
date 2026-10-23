@@ -5,6 +5,8 @@ import hashlib
 import hmac
 import time
 import random
+import json
+import struct
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -306,6 +308,66 @@ async def proxy_satellite_imagery(z: int, y: int, x: int):
         print(f"Satellite tile proxy failed z={z} y={y} x={x}: {exc}")
         raise HTTPException(status_code=502, detail="Satellite imagery tile temporarily unavailable")
 
+
+MODEL_URLS = {
+    "airbus-a320": "https://raw.githubusercontent.com/wprojecter-cmd/flight-simulator/main/airbus_a320_s7_airlines.glb",
+    "sr72-darkstar": "https://raw.githubusercontent.com/supermanone-boop/models/main/lockheed_martin_sr72_darkstar__topgun_maverick.glb",
+    "airbus-a380": "https://raw.githubusercontent.com/amvlab/aircraft-models/main/models/A380_nologo.glb",
+    "boeing-737": "https://raw.githubusercontent.com/amvlab/aircraft-models/main/models/B737_nologo.glb",
+    "boeing-787": "https://raw.githubusercontent.com/amvlab/aircraft-models/main/models/B787_nologo.glb",
+    "airbus-a350": "https://raw.githubusercontent.com/amvlab/aircraft-models/main/models/A350_nologo.glb",
+    "an124": "https://raw.githubusercontent.com/supermanone-boop/models/main/an124.glb",
+    "su57": "https://raw.githubusercontent.com/supermanone-boop/models/main/su57.glb",
+    "b52": "https://raw.githubusercontent.com/supermanone-boop/models/main/boeing_b-52_stratofortress.glb",
+    "sh60": "https://raw.githubusercontent.com/supermanone-boop/models/main/sh-60b_seahawk_helicopter.glb",
+    "c130": "https://raw.githubusercontent.com/supermanone-boop/models/main/lockheed_martin_c130jsuper_hercules_reupload.glb",
+    "evtol": "https://raw.githubusercontent.com/amvlab/aircraft-models/main/models/EVTOL_nologo.glb",
+    "drone": "https://raw.githubusercontent.com/amvlab/aircraft-models/main/models/drone_nologo.glb",
+}
+
+@app.get("/api/models/{model_id}.glb")
+async def aircraft_model(model_id: str):
+    url = MODEL_URLS.get(model_id)
+    if not url:
+        raise HTTPException(404, "Неизвестная модель самолёта.")
+    try:
+        async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
+            upstream = await client.get(url)
+            upstream.raise_for_status()
+        raw = upstream.content
+        if len(raw) < 20 or raw[:4] != b"glTF":
+            raise HTTPException(502, f"Источник модели {model_id} вернул не GLB.")
+        version, total_length = struct.unpack_from("<II", raw, 4)
+        json_length, json_type = struct.unpack_from("<II", raw, 12)
+        if version != 2 or json_type != 0x4E4F534A or json_length > len(raw) - 20:
+            raise HTTPException(502, f"Некорректный GLB у модели {model_id}.")
+        try:
+            document = json.loads(raw[20:20 + json_length].decode("utf-8").rstrip(" \t\r\n\0"))
+            # Cesium 1.132 can fail compiling some third-party anisotropy materials.
+            for material in document.get("materials", []):
+                extensions = material.get("extensions", {})
+                extensions.pop("KHR_materials_anisotropy", None)
+                if not extensions:
+                    material.pop("extensions", None)
+            for key in ("extensionsUsed", "extensionsRequired"):
+                if key in document:
+                    document[key] = [name for name in document[key] if name != "KHR_materials_anisotropy"]
+                    if not document[key]:
+                        document.pop(key, None)
+            clean_json = json.dumps(document, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            clean_json += b" " * ((4 - len(clean_json) % 4) % 4)
+            rest = raw[20 + json_length:]
+            result = b"glTF" + struct.pack("<II", version, 12 + 8 + len(clean_json) + len(rest))
+            result += struct.pack("<II", len(clean_json), 0x4E4F534A) + clean_json + rest
+            return Response(result, media_type="model/gltf-binary", headers={"Cache-Control": "public, max-age=3600"})
+        except (ValueError, UnicodeDecodeError, KeyError) as exc:
+            print(f"Could not sanitize aircraft GLB {model_id}: {exc}")
+            return Response(raw, media_type="model/gltf-binary", headers={"Cache-Control": "public, max-age=3600"})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"Aircraft model proxy failed ({model_id}): {exc}")
+        raise HTTPException(502, f"Не удалось загрузить модель {model_id} из источника.")
 
 @app.get("/api/temperature-tiles/{z}/{x}/{y}.png")
 async def temperature_tile(z: int, x: int, y: int):
