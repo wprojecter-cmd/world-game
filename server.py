@@ -264,39 +264,74 @@ road_response_cache = {}
 
 @app.get("/api/roads")
 async def road_network(lat: float, lon: float, radius: int = 1200):
-    """Return nearby OSM road geometries for client-side, road-constrained traffic."""
+    """Return nearby OSM roads with multiple Overpass fallbacks and stale-cache support."""
     lat = max(-85.0, min(85.0, lat))
     lon = max(-180.0, min(180.0, lon))
     radius = max(500, min(4500, int(radius)))
     cache_key = (round(lat, 2), round(lon, 2), int(radius / 250))
-    cached = road_response_cache.get(cache_key)
     now = time.monotonic()
-    if cached and now - cached[0] < 900:
-        return cached[1]
-    query = f"""[out:json][timeout:18];way(around:{radius},{lat:.6f},{lon:.6f})[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|road)$"][area!~"yes"];out tags geom;"""
-    try:
-        async with httpx.AsyncClient(timeout=22, follow_redirects=True,
-                                     headers={"User-Agent": "WorldGame/1.0 road-traffic demo"}) as client:
-            response = await client.post("https://overpass-api.de/api/interpreter", data={"data": query})
-            response.raise_for_status()
-            payload = response.json()
-        ways = []
-        for way in payload.get("elements", []):
-            geometry = way.get("geometry") or []
-            if len(geometry) >= 2:
-                ways.append({"id": way.get("id"), "tags": way.get("tags", {}),
-                             "geometry": [{"lat": p["lat"], "lon": p["lon"]} for p in geometry
-                                          if "lat" in p and "lon" in p]})
-        result = {"ways": ways, "count": len(ways), "source": "OpenStreetMap"}
-        road_response_cache[cache_key] = (now, result)
-        if len(road_response_cache) > 200:
-            for key, value in list(road_response_cache.items()):
-                if now - value[0] > 1800:
-                    road_response_cache.pop(key, None)
+    cached = road_response_cache.get(cache_key)
+    if cached and now - cached["time"] < 900:
+        return cached["data"]
+
+    query = (
+        f'[out:json][timeout:25];'
+        f'way(around:{radius},{lat:.6f},{lon:.6f})'
+        f'[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|road)$"];'
+        f'out tags geom;'
+    )
+    # Public Overpass instances sometimes throttle or temporarily fail. Try alternatives.
+    endpoints = (
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://overpass.nchc.org.tw/api/interpreter",
+    )
+    errors = []
+    timeout = httpx.Timeout(28.0, connect=8.0)
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True,
+                                 headers={"User-Agent": "WorldGame/1.0 (road traffic; OpenStreetMap data)"}) as client:
+        for endpoint in endpoints:
+            try:
+                response = await client.post(endpoint, data={"data": query})
+                response.raise_for_status()
+                payload = response.json()
+                ways = []
+                for way in payload.get("elements", []):
+                    geometry = way.get("geometry") or []
+                    if len(geometry) >= 2:
+                        points = [{"lat": p["lat"], "lon": p["lon"]}
+                                  for p in geometry if "lat" in p and "lon" in p]
+                        if len(points) >= 2:
+                            ways.append({"id": way.get("id"), "tags": way.get("tags", {}),
+                                         "geometry": points})
+                result = {"ways": ways, "count": len(ways), "source": "OpenStreetMap"}
+                road_response_cache[cache_key] = {"time": now, "data": result}
+                # Keep memory bounded; retain recent entries for stale fallback.
+                if len(road_response_cache) > 300:
+                    for key, value in sorted(road_response_cache.items(), key=lambda item: item[1]["time"]):
+                        if now - value["time"] > 21600 or len(road_response_cache) > 300:
+                            road_response_cache.pop(key, None)
+                        if len(road_response_cache) <= 240:
+                            break
+                return result
+            except Exception as exc:
+                errors.append(f"{endpoint}: {type(exc).__name__}: {exc}")
+                continue
+
+    # If every upstream is down, reuse older nearby cached roads rather than fail hard.
+    stale = []
+    for (cached_lat, cached_lon, _bucket), value in road_response_cache.items():
+        age = now - value["time"]
+        if age <= 21600 and abs(cached_lat - round(lat, 2)) <= 0.08 and abs(cached_lon - round(lon, 2)) <= 0.08:
+            stale.append((age, value["data"]))
+    if stale:
+        result = dict(min(stale, key=lambda item: item[0])[1])
+        result["stale"] = True
         return result
-    except Exception as exc:
-        print(f"OSM road lookup failed near {lat:.3f},{lon:.3f}: {exc}")
-        raise HTTPException(502, "Не удалось загрузить дорожную сеть OpenStreetMap. Повторите попытку позже.")
+
+    print(f"All Overpass endpoints failed near {lat:.3f},{lon:.3f}: {' | '.join(errors)}")
+    # Return an empty, valid response so traffic can gracefully remain disabled.
+    return {"ways": [], "count": 0, "source": "OpenStreetMap", "unavailable": True}
 
 @app.get("/api/players")
 async def players(user=Depends(current_user)):
