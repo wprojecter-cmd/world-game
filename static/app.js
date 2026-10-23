@@ -184,21 +184,61 @@ function trafficOffset(lat,lon,heading,forward,lateral){const north=forward*Math
 function trafficEntityPoint(v,offset,height){const p=trafficOffset(v.lat,v.lon,v.heading,offset[1],offset[0]);return Cesium.Cartesian3.fromDegrees(p.lon,p.lat,height+offset[2])}
 function makeTrafficCar(index){
  const style=trafficStyles[index%trafficStyles.length],parts=[];
- const part=(id,offset,dimensions,material)=>{const e=viewer.entities.add({id:'traffic-'+index+'-'+id,position:Cesium.Cartesian3.fromDegrees(position.lon,position.lat,2),orientation:Cesium.Transforms.headingPitchRollQuaternion(Cesium.Cartesian3.fromDegrees(position.lon,position.lat,2),new Cesium.HeadingPitchRoll(0,0,0)),box:{dimensions:new Cesium.Cartesian3(...dimensions),material,outline:false}});parts.push({entity:e,offset})};
- const body=Cesium.Color.fromCssColorString(style.body),roof=Cesium.Color.fromCssColorString(style.roof);
- part('body',[0,0,0.72],[4.0,1.72,0.82],body);
- part('roof',[0,0.12,1.28],[2.05,1.42,0.48],roof);
- part('glass',[0,0.14,1.34],[1.62,1.45,0.25],Cesium.Color.fromBytes(75,155,190,220));
- for(const x of [-1.28,1.28])for(const y of [-0.88,0.88])part('wheel-'+x+'-'+y,[x,y,0.37],[0.78,0.25,0.55],Cesium.Color.fromBytes(25,28,32));
- if(style.name==='Police'||style.name==='Ambulance')part('light',[0,0.12,1.58],[0.5,0.42,0.12],style.name==='Police'?Cesium.Color.RED:Cesium.Color.RED);
- return {style,parts,roadIndex:0,distance:0,speed:7+Math.random()*6,last:{lat:position.lat,lon:position.lon,heading:0}};
+ const add=(id,offset,dimensions,material,shape='box')=>{
+  const base=Cesium.Cartesian3.fromDegrees(position.lon,position.lat,2);
+  const entity=viewer.entities.add({
+   id:'traffic-'+index+'-'+id,
+   position:base,
+   orientation:Cesium.Transforms.headingPitchRollQuaternion(base,new Cesium.HeadingPitchRoll(0,0,0)),
+   [shape]:shape==='ellipsoid'
+    ? {radii:new Cesium.Cartesian3(...dimensions),material,outline:false}
+    : {dimensions:new Cesium.Cartesian3(...dimensions),material,outline:false}
+  });
+  parts.push({entity,offset});
+ };
+ const paint=hex=>Cesium.Color.fromCssColorString(hex);
+ const body=paint(style.body),roof=paint(style.roof);
+ const glass=Cesium.Color.fromBytes(48,91,116,235);
+ const rubber=Cesium.Color.fromBytes(24,27,30),rim=Cesium.Color.fromBytes(155,165,174);
+ const headlight=Cesium.Color.fromBytes(255,244,190),tail=Cesium.Color.fromBytes(215,38,32);
+ // Local +Y is the direction of travel: the long axis now follows the road bearing.
+ add('lower-body',[0,0,0.66],[1.78,4.15,0.72],body);
+ add('hood',[0,-1.25,0.91],[1.62,1.15,0.27],body);
+ add('trunk',[0,1.48,0.91],[1.58,0.78,0.26],body);
+ add('cabin',[0,0.05,1.18],[1.48,2.0,0.62],roof);
+ add('windshield-front',[0,-0.58,1.48],[1.30,0.08,0.36],glass);
+ add('windshield-rear',[0,0.79,1.47],[1.28,0.08,0.34],glass);
+ add('side-window-left',[-0.755,0.06,1.46],[0.055,1.08,0.31],glass);
+ add('side-window-right',[0.755,0.06,1.46],[0.055,1.08,0.31],glass);
+ add('front-bumper',[0,-2.09,0.56],[1.70,0.16,0.22],Cesium.Color.fromBytes(55,58,62));
+ add('rear-bumper',[0,2.09,0.56],[1.66,0.16,0.22],Cesium.Color.fromBytes(55,58,62));
+ add('front-grille',[0,-2.13,0.73],[0.55,0.045,0.19],Cesium.Color.fromBytes(35,39,42));
+ for(const side of [-1,1]){
+  add('headlight-'+side,[side*0.59,-2.12,0.78],[0.30,0.07,0.14],headlight);
+  add('taillight-'+side,[side*0.59,2.08,0.78],[0.28,0.07,0.17],tail);
+  for(const longitudinal of [-1.28,1.28]){
+   add('tire-'+side+'-'+longitudinal,[side*0.91,longitudinal,0.37],[0.19,0.34,0.34],rubber,'ellipsoid');
+   add('rim-'+side+'-'+longitudinal,[side*1.015,longitudinal,0.37],[0.035,0.17,0.17],rim,'ellipsoid');
+  }
+ }
+ if(style.name==='Police'||style.name==='Ambulance'){
+  add('emergency-light-left',[-0.23,0.04,1.57],[0.18,0.26,0.10],Cesium.Color.RED);
+  add('emergency-light-right',[0.23,0.04,1.57],[0.18,0.26,0.10],Cesium.Color.BLUE);
+ }
+ return {style,parts,roadIndex:0,distance:0,speed:10+Math.random()*7,last:{lat:position.lat,lon:position.lon,heading:0}};
 }
 function placeTrafficCar(car,point){
  const cart=Cesium.Cartesian3.fromDegrees(point.lon,point.lat,2);
- const hpr=new Cesium.HeadingPitchRoll(point.heading,0,0),orientation=Cesium.Transforms.headingPitchRollQuaternion(cart,hpr);
- let ground=0;try{const h=viewer.scene.globe.getHeight(Cesium.Cartographic.fromDegrees(point.lon,point.lat));if(Number.isFinite(h))ground=h}catch{}
+ // Cesium's local +Y axis points north at heading zero, matching our car's long axis.
+ const hpr=new Cesium.HeadingPitchRoll(point.heading,0,0);
+ const orientation=Cesium.Transforms.headingPitchRollQuaternion(cart,hpr);
+ let ground=0;
+ try{const h=viewer.scene.globe.getHeight(Cesium.Cartographic.fromDegrees(point.lon,point.lat));if(Number.isFinite(h))ground=h}catch{}
  car.last=point;
- car.parts.forEach(({entity,offset})=>{entity.position=trafficEntityPoint(point,offset,ground);entity.orientation=orientation});
+ car.parts.forEach(({entity,offset})=>{
+  entity.position=trafficEntityPoint(point,offset,ground);
+  entity.orientation=orientation;
+ });
 }
 function clearTraffic(){trafficState.cars.forEach(c=>c.parts.forEach(p=>viewer?.entities.remove(p.entity)));trafficState.cars=[];trafficState.roads=[];trafficState.active=false;if(viewer)viewer.scene.requestRender()}
 async function fetchRoadsDirectFromBrowser(lat,lon,radius){
