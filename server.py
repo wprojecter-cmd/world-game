@@ -24,6 +24,7 @@ ALGORITHM = "HS256"
 MONGO_URI = os.getenv("MONGO_URI", "")
 CESIUM_ION_TOKEN = os.getenv("CESIUM_ION_TOKEN", "")
 CESIUM_ION_ADMIN_TOKEN = os.getenv("CESIUM_ION_ADMIN_TOKEN", "")
+MAPSOURCE_API_KEY = os.getenv("MAPSOURCE_API_KEY", "").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
 
@@ -282,24 +283,29 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
         f'[highway][highway!~"^(footway|path|steps|pedestrian|cycleway|bridleway|corridor|elevator|proposed|construction)$"];'
         f'out tags geom;'
     )
-    # Public Overpass instances sometimes throttle or temporarily fail. Try alternatives.
-    endpoints = (
-        # Put alternate operators first: the primary endpoint was unreachable from Render.
-        "https://overpass.private.coffee/api/interpreter",
-        "https://lz4.overpass-api.de/api/interpreter",
-        "https://overpass-api.de/api/interpreter",
-        "https://overpass.kumi.systems/api/interpreter",
-        "https://osm.hpi.de/overpass/",
-        "https://overpass.nchc.org.tw/api/interpreter",
-    )
+    # Mapsource is a separate hosted OSM query service. It requires a subscription API key.
+    # Keep the key on the server; do not expose it to browser JavaScript.
+    endpoints = []
+    if MAPSOURCE_API_KEY:
+        endpoints.append(("https://api.mapsource.io/interpreter", "Mapsource/OpenStreetMap", True))
+    endpoints.extend([
+        ("https://overpass.private.coffee/api/interpreter", "OpenStreetMap", False),
+        ("https://lz4.overpass-api.de/api/interpreter", "OpenStreetMap", False),
+        ("https://overpass-api.de/api/interpreter", "OpenStreetMap", False),
+        ("https://overpass.kumi.systems/api/interpreter", "OpenStreetMap", False),
+        ("https://overpass.nchc.org.tw/api/interpreter", "OpenStreetMap", False),
+    ])
     errors = []
-    # Short per-endpoint timeout keeps one broken host from stalling all traffic for minutes.
-    timeout = httpx.Timeout(12.0, connect=4.0)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True,
-                                 headers={"User-Agent": "WorldGame/1.0 (road traffic; OpenStreetMap data)"}) as client:
-        for endpoint in endpoints:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(12.0, connect=4.0),
+        follow_redirects=True,
+        headers={"User-Agent": "WorldGame/1.0 (road traffic; OpenStreetMap data)"}
+    ) as client:
+        for endpoint, source_name, is_mapsource in endpoints:
             try:
-                response = await client.post(endpoint, data={"data": query})
+                headers = {"Authorization": f"Bearer {MAPSOURCE_API_KEY}"} if is_mapsource else {}
+                timeout = httpx.Timeout(35.0, connect=8.0) if is_mapsource else httpx.Timeout(12.0, connect=4.0)
+                response = await client.post(endpoint, data={"data": query}, headers=headers, timeout=timeout)
                 response.raise_for_status()
                 payload = response.json()
                 ways = []
@@ -311,12 +317,9 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
                         if len(points) >= 2:
                             ways.append({"id": way.get("id"), "tags": way.get("tags", {}),
                                          "geometry": points})
-                result = {"ways": ways, "count": len(ways), "source": "OpenStreetMap"}
-                # Never cache empty successful responses: temporary incomplete upstream data
-                # must not hide roads for the next 15 minutes.
+                result = {"ways": ways, "count": len(ways), "source": source_name}
                 if ways:
                     road_response_cache[cache_key] = {"time": now, "data": result}
-                # Keep memory bounded; retain recent entries for stale fallback.
                 if len(road_response_cache) > 300:
                     for key, value in sorted(road_response_cache.items(), key=lambda item: item[1]["time"]):
                         if now - value["time"] > 21600 or len(road_response_cache) > 300:
@@ -326,7 +329,6 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
                 if ways:
                     return result
                 errors.append(f"{endpoint}: valid JSON but zero road ways returned")
-                continue
             except Exception as exc:
                 errors.append(f"{endpoint}: {type(exc).__name__}: {exc}")
                 continue
