@@ -201,6 +201,30 @@ function placeTrafficCar(car,point){
  car.parts.forEach(({entity,offset})=>{entity.position=trafficEntityPoint(point,offset,ground);entity.orientation=orientation});
 }
 function clearTraffic(){trafficState.cars.forEach(c=>c.parts.forEach(p=>viewer?.entities.remove(p.entity)));trafficState.cars=[];trafficState.roads=[];trafficState.active=false;if(viewer)viewer.scene.requestRender()}
+async function fetchRoadsDirectFromBrowser(lat,lon,radius){
+ const query='[out:json][timeout:18];way(around:'+Math.round(radius)+','+Number(lat).toFixed(6)+','+Number(lon).toFixed(6)+')[highway][highway!~"^(footway|path|steps|pedestrian|cycleway|bridleway|corridor|elevator|proposed|construction)$"];out tags geom;';
+ const hosts=[
+  'https://overpass.private.coffee/api/interpreter',
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter'
+ ];
+ const failures=[];
+ for(const host of hosts){
+  const controller=new AbortController(),timeoutId=setTimeout(()=>controller.abort(),18000);
+  try{
+   const response=await fetch(host+'?data='+encodeURIComponent(query),{method:'GET',mode:'cors',signal:controller.signal,headers:{'Accept':'application/json'}});
+   if(!response.ok)throw Error('HTTP '+response.status);
+   const payload=await response.json(),ways=[];
+   for(const way of (payload.elements||[])){
+    const geometry=way.geometry||[];
+    if(geometry.length>=2)ways.push({id:way.id,tags:way.tags||{},geometry:geometry.filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon))});
+   }
+   if(ways.length)return {ways,count:ways.length,source:'OpenStreetMap browser fallback'};
+   failures.push(host+': empty result');
+  }catch(e){failures.push(host+': '+(e?.message||e))}finally{clearTimeout(timeoutId)}
+ }
+ return {ways:[],count:0,unavailable:true,errors:failures};
+}
 async function fetchTrafficRoads(force=false){
  if(!viewer||trafficState.fetching)return;
  const now=Date.now(),moved=!Number.isFinite(trafficState.lastLat)||roadDistance({lat:trafficState.lastLat,lon:trafficState.lastLon},position)>1200;
@@ -211,7 +235,14 @@ async function fetchTrafficRoads(force=false){
   const url='/api/roads?lat='+encodeURIComponent(position.lat)+'&lon='+encodeURIComponent(position.lon)+'&radius='+Math.round(radius);
   const response=await fetch(url,{headers:token?{Authorization:'Bearer '+token}:{}});
   if(!response.ok)throw Error('OSM roads HTTP '+response.status);
-  const data=await response.json(),roads=[];
+  let data=await response.json();
+  if(!(data.ways||[]).length){
+   console.info('Server road lookup unavailable; trying browser-side OpenStreetMap fallback.');
+   const direct=await fetchRoadsDirectFromBrowser(position.lat,position.lon,radius);
+   if((direct.ways||[]).length)data=direct;
+   else data.errors=[...(data.errors||[]),...(direct.errors||[])];
+  }
+  const roads=[];
   for(const way of (data.ways||[])){const pts=(way.geometry||[]).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon));if(pts.length<2)continue;const segments=[];let length=0;for(let i=1;i<pts.length;i++){const d=roadDistance(pts[i-1],pts[i]);if(d<1)continue;segments.push({a:pts[i-1],b:pts[i],length:d,heading:trafficBearing(pts[i-1],pts[i])});length+=d}if(length>45)roads.push({points:pts,segments,length,highway:way.tags?.highway||'road'})}
   if(!roads.length){
    trafficState.active=false;
