@@ -284,12 +284,17 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
     )
     # Public Overpass instances sometimes throttle or temporarily fail. Try alternatives.
     endpoints = (
+        # Put alternate operators first: the primary endpoint was unreachable from Render.
+        "https://overpass.private.coffee/api/interpreter",
+        "https://lz4.overpass-api.de/api/interpreter",
         "https://overpass-api.de/api/interpreter",
         "https://overpass.kumi.systems/api/interpreter",
+        "https://osm.hpi.de/overpass/",
         "https://overpass.nchc.org.tw/api/interpreter",
     )
     errors = []
-    timeout = httpx.Timeout(28.0, connect=8.0)
+    # Short per-endpoint timeout keeps one broken host from stalling all traffic for minutes.
+    timeout = httpx.Timeout(12.0, connect=4.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True,
                                  headers={"User-Agent": "WorldGame/1.0 (road traffic; OpenStreetMap data)"}) as client:
         for endpoint in endpoints:
