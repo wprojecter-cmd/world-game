@@ -214,17 +214,17 @@ async function fetchTrafficRoads(force=false){
   const data=await response.json(),roads=[];
   for(const way of (data.ways||[])){const pts=(way.geometry||[]).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon));if(pts.length<2)continue;const segments=[];let length=0;for(let i=1;i<pts.length;i++){const d=roadDistance(pts[i-1],pts[i]);if(d<1)continue;segments.push({a:pts[i-1],b:pts[i],length:d,heading:trafficBearing(pts[i-1],pts[i])});length+=d}if(length>45)roads.push({points:pts,segments,length,highway:way.tags?.highway||'road'})}
   if(!roads.length)throw Error('В этом радиусе не найдены дорожные линии');
-  const oldCars=trafficState.cars;trafficState.cars=[];trafficState.roads=roads;
+  const oldCars=trafficState.cars;oldCars.forEach(c=>c.parts.forEach(p=>viewer?.entities.remove(p.entity)));trafficState.cars=[];trafficState.roads=roads;
   const cap=mode==='aircraft'? (position.alt<=350?42:position.alt<=700?28:16):22;
   for(let i=0;i<cap;i++){const road=roads[Math.floor(Math.random()*roads.length)];if(!road||!road.length)continue;const car=makeTrafficCar(i);car.roadIndex=roads.indexOf(road);car.distance=Math.random()*road.length;trafficState.cars.push(car);placeTrafficCar(car,trafficPointAt(road,car.distance))}
-  oldCars.forEach(c=>c.parts.forEach(p=>viewer?.entities.remove(p.entity)));
   trafficState.active=true;viewer.scene.requestRender();
  }catch(e){console.warn('Road traffic unavailable:',e?.message||e)}finally{trafficState.fetching=false}
 }
 function updateRoadTraffic(dt){
  const eligible=mode==='human'||(mode==='aircraft'&&Number(position.alt)<=1000);
  if(!viewer||!eligible){if(trafficState.active||trafficState.cars.length)clearTraffic();return}
- if(!trafficState.active){fetchTrafficRoads().catch(console.warn);return}
+ if(!trafficState.active){if(Date.now()-trafficState.lastFetch>8000)fetchTrafficRoads().catch(console.warn);return}
+ if(Date.now()-trafficState.lastFetch>45000&&roadDistance({lat:trafficState.lastLat,lon:trafficState.lastLon},position)>1200)fetchTrafficRoads().catch(console.warn);
  for(const car of trafficState.cars){const road=trafficState.roads[car.roadIndex];if(!road)continue;car.distance=(car.distance+car.speed*dt)%road.length;placeTrafficCar(car,trafficPointAt(road,car.distance))}
  if(viewer) viewer.scene.requestRender();
 }
