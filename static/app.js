@@ -311,12 +311,18 @@ async function fetchTrafficRoads(force=false){
   trafficState.active=true;viewer.scene.requestRender();
  }catch(e){console.warn('Road traffic temporarily unavailable:',e?.message||e);trafficState.lastFetch=Date.now()}finally{trafficState.fetching=false}
 }
+let trafficLastFrame=0;
 function updateRoadTraffic(dt){
+ const now=performance.now();
+ // The main player loop awaits network requests; use real elapsed time for traffic
+ // so vehicles keep moving even when the position API is slow.
+ const trafficDt=trafficLastFrame?Math.min(0.25,Math.max(0,(now-trafficLastFrame)/1000)):0.05;
+ trafficLastFrame=now;
  const eligible=mode==='human'||(mode==='aircraft'&&Number(position.alt)<=1000);
  if(!viewer||!eligible){if(trafficState.active||trafficState.cars.length)clearTraffic();return}
  if(!trafficState.active){if(Date.now()-trafficState.lastFetch>45000)fetchTrafficRoads().catch(e=>console.warn('Road traffic request failed:',e?.message||e));return}
  if(Date.now()-trafficState.lastFetch>45000&&roadDistance({lat:trafficState.lastLat,lon:trafficState.lastLon},position)>1200)fetchTrafficRoads().catch(console.warn);
- for(const car of trafficState.cars){const road=trafficState.roads[car.roadIndex];if(!road)continue;car.distance=(car.distance+car.speed*dt)%road.length;placeTrafficCar(car,trafficPointAt(road,car.distance))}
+ for(const car of trafficState.cars){const road=trafficState.roads[car.roadIndex];if(!road)continue;car.distance=(car.distance+car.speed*trafficDt)%road.length;placeTrafficCar(car,trafficPointAt(road,car.distance))}
  if(viewer) viewer.scene.requestRender();
 }
 
