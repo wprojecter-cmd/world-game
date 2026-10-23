@@ -307,6 +307,28 @@ async def proxy_satellite_imagery(z: int, y: int, x: int):
         raise HTTPException(status_code=502, detail="Satellite imagery tile temporarily unavailable")
 
 
+@app.get("/api/temperature-tiles/{z}/{x}/{y}.png")
+async def temperature_tile(z: int, x: int, y: int):
+    if not OPENWEATHER_API_KEY:
+        raise HTTPException(503, "Температурный слой требует OPENWEATHER_API_KEY в Render Environment.")
+    if not (0 <= z <= 18 and 0 <= x < 2 ** z and 0 <= y < 2 ** z):
+        raise HTTPException(400, "Недопустимые координаты тайла.")
+    url = f"https://tile.openweathermap.org/map/temp_new/{z}/{x}/{y}.png"
+    try:
+        async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+            tile = await client.get(url, params={"appid": OPENWEATHER_API_KEY})
+            if tile.status_code in (401, 403):
+                raise HTTPException(503, "OpenWeather отклонил ключ или не включил доступ к погодным тайлам.")
+            tile.raise_for_status()
+            return Response(content=tile.content, media_type="image/png",
+                            headers={"Cache-Control": "public, max-age=900"})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"OpenWeather temperature tile failed z={z} x={x} y={y}: {exc}")
+        raise HTTPException(502, "Температурный тайл временно недоступен.")
+
+
 @app.get("/api/weather")
 async def weather(lat: float, lon: float):
     lat = max(-90, min(90, lat))
