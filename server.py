@@ -269,7 +269,7 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
     lat = max(-85.0, min(85.0, lat))
     lon = max(-180.0, min(180.0, lon))
     radius = max(500, min(4500, int(radius)))
-    cache_key = (round(lat, 2), round(lon, 2), int(radius / 250))
+    cache_key = (round(lat, 3), round(lon, 3), int(radius / 250))
     now = time.monotonic()
     cached = road_response_cache.get(cache_key)
     if cached and cached["data"].get("count", 0) > 0 and now - cached["time"] < 900:
@@ -366,7 +366,7 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
                 })
         if route_ways:
             result = {"ways": route_ways, "count": len(route_ways), "source": "OSRM / OpenStreetMap", "fallback": True}
-            road_response_cache[cache_key] = {"time": now, "data": result}
+            # Do not cache OSRM routes as if they were the local road network.
             return result
     except Exception as exc:
         errors.append(f"OSRM route fallback: {type(exc).__name__}: {exc}")
@@ -376,7 +376,7 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
     stale = []
     for (cached_lat, cached_lon, _bucket), value in road_response_cache.items():
         age = now - value["time"]
-        if age <= 21600 and abs(cached_lat - round(lat, 2)) <= 0.08 and abs(cached_lon - round(lon, 2)) <= 0.08:
+        if age <= 21600 and abs(cached_lat - round(lat, 3)) <= 0.015 and abs(cached_lon - round(lon, 3)) <= 0.015:
             stale.append((age, value["data"]))
     if stale:
         result = dict(min(stale, key=lambda item: item[0])[1])
