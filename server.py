@@ -271,7 +271,7 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
     cache_key = (round(lat, 2), round(lon, 2), int(radius / 250))
     now = time.monotonic()
     cached = road_response_cache.get(cache_key)
-    if cached and now - cached["time"] < 900:
+    if cached and cached["data"].get("count", 0) > 0 and now - cached["time"] < 900:
         return cached["data"]
 
     # Ask for all mapped highway classes first; rural roads and local streets
@@ -307,7 +307,10 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
                             ways.append({"id": way.get("id"), "tags": way.get("tags", {}),
                                          "geometry": points})
                 result = {"ways": ways, "count": len(ways), "source": "OpenStreetMap"}
-                road_response_cache[cache_key] = {"time": now, "data": result}
+                # Never cache empty successful responses: temporary incomplete upstream data
+                # must not hide roads for the next 15 minutes.
+                if ways:
+                    road_response_cache[cache_key] = {"time": now, "data": result}
                 # Keep memory bounded; retain recent entries for stale fallback.
                 if len(road_response_cache) > 300:
                     for key, value in sorted(road_response_cache.items(), key=lambda item: item[1]["time"]):
@@ -315,7 +318,10 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
                             road_response_cache.pop(key, None)
                         if len(road_response_cache) <= 240:
                             break
-                return result
+                if ways:
+                    return result
+                errors.append(f"{endpoint}: valid JSON but zero road ways returned")
+                continue
             except Exception as exc:
                 errors.append(f"{endpoint}: {type(exc).__name__}: {exc}")
                 continue
@@ -333,7 +339,7 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
 
     print(f"All Overpass endpoints failed near {lat:.3f},{lon:.3f}: {' | '.join(errors)}")
     # Return an empty, valid response so traffic can gracefully remain disabled.
-    return {"ways": [], "count": 0, "source": "OpenStreetMap", "unavailable": True, "errors": errors}
+    return {"ways": [], "count": 0, "source": "OpenStreetMap", "unavailable": True, "errors": errors, "searched_radius": radius, "coordinates": {"lat": lat, "lon": lon}}
 
 @app.get("/api/players")
 async def players(user=Depends(current_user)):
