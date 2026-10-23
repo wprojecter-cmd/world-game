@@ -8,11 +8,11 @@ import random
 import json
 import struct
 import math
+import math
 from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
-import mapbox_vector_tile
 from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, Header, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -265,99 +265,6 @@ async def release_country(user=Depends(current_user)):
 road_response_cache = {}
 road_tile_cache = {}
 
-def _tile_xy(lat: float, lon: float, zoom: int):
-    n = 1 << zoom
-    x = int((lon + 180.0) / 360.0 * n)
-    lat_rad = math.radians(max(-85.05112878, min(85.05112878, lat)))
-    y = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
-    return max(0, min(n - 1, x)), max(0, min(n - 1, y))
-
-def _tile_point_to_lonlat(tile_x: int, tile_y: int, px: float, py: float, extent: int, zoom: int):
-    n = 1 << zoom
-    world_x = tile_x + px / extent
-    world_y = tile_y + py / extent
-    lon = world_x / n * 360.0 - 180.0
-    lat = math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * world_y / n))))
-    return {"lat": max(-85.0, min(85.0, lat)), "lon": max(-180.0, min(180.0, lon))}
-
-async def openfreemap_road_tiles(lat: float, lon: float, radius: int):
-    """Read real OSM road geometry from free global OpenFreeMap vector tiles (no key)."""
-    zoom = 14
-    center_x, center_y = _tile_xy(lat, lon, zoom)
-    n = 1 << zoom
-    tile_keys = []
-    for dy in (-1, 0, 1):
-        for dx in (-1, 0, 1):
-            tx = (center_x + dx) % n
-            ty = center_y + dy
-            if 0 <= ty < n:
-                tile_keys.append((tx, ty))
-    now = time.monotonic()
-    result_ways = []
-    missing = []
-    for tx, ty in tile_keys:
-        cached_tile = road_tile_cache.get((zoom, tx, ty))
-        if cached_tile and now - cached_tile["time"] < 86400:
-            result_ways.extend(cached_tile["ways"])
-        else:
-            missing.append((tx, ty))
-    if missing:
-        semaphore = asyncio.Semaphore(4)
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(12.0, connect=5.0),
-            follow_redirects=True,
-            headers={"User-Agent": "WorldGame/1.0 (OpenStreetMap road traffic; contact via project repository)"}
-        ) as client:
-            async def load_tile(tx: int, ty: int):
-                async with semaphore:
-                    try:
-                        url = f"https://tiles.openfreemap.org/planet/latest/{zoom}/{tx}/{ty}.pbf"
-                        response = await client.get(url)
-                        if response.status_code in (204, 404):
-                            return tx, ty, []
-                        response.raise_for_status()
-                        decoded = mapbox_vector_tile.decode(response.content)
-                        ways = []
-                        layer = decoded.get("transportation", {})
-                        extent = int(layer.get("extent", 4096) or 4096)
-                        for feature in layer.get("features", []):
-                            props = feature.get("properties") or {}
-                            road_class = str(props.get("class") or props.get("subclass") or "road").lower()
-                            if road_class in {"path", "footway", "pedestrian", "cycleway", "steps", "bridleway", "corridor", "platform"}:
-                                continue
-                            geom = feature.get("geometry") or {}
-                            coords = geom.get("coordinates") or []
-                            lines = [coords] if geom.get("type") == "LineString" else coords if geom.get("type") == "MultiLineString" else []
-                            for line in lines:
-                                points = [_tile_point_to_lonlat(tx, ty, float(p[0]), float(p[1]), extent, zoom)
-                                          for p in line if isinstance(p, (list, tuple)) and len(p) >= 2]
-                                if len(points) >= 2:
-                                    ways.append({"id": feature.get("id"), "tags": {"highway": road_class, "name": props.get("name", "")}, "geometry": points})
-                        return tx, ty, ways
-                    except Exception as exc:
-                        print(f"OpenFreeMap road tile failed z={zoom} x={tx} y={ty}: {type(exc).__name__}: {exc}")
-                        return tx, ty, []
-            loaded = await asyncio.gather(*(load_tile(tx, ty) for tx, ty in missing))
-            for tx, ty, ways in loaded:
-                road_tile_cache[(zoom, tx, ty)] = {"time": now, "ways": ways}
-                result_ways.extend(ways)
-        if len(result_ways) >= 1200:
-            break
-    if len(road_tile_cache) > 1200:
-        for key, value in sorted(road_tile_cache.items(), key=lambda item: item[1]["time"])[:300]:
-            road_tile_cache.pop(key, None)
-    # Deduplicate identical clipped features without merging across tile boundaries.
-    unique = {}
-    for way in result_ways:
-        geometry = way.get("geometry") or []
-        if len(geometry) < 2:
-            continue
-        first, last = geometry[0], geometry[-1]
-        key = (way.get("id"), round(first["lat"], 5), round(first["lon"], 5), round(last["lat"], 5), round(last["lon"], 5))
-        unique[key] = way
-    ways = list(unique.values())
-    return {"ways": ways, "count": len(ways), "source": "OpenFreeMap / OpenStreetMap vector tiles"}
-
 @app.get("/api/roads")
 async def road_network(lat: float, lon: float, radius: int = 1200):
     """Return nearby OSM roads with multiple Overpass fallbacks and stale-cache support."""
@@ -370,16 +277,7 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
     if cached and cached["data"].get("count", 0) > 0 and now - cached["time"] < 900:
         return cached["data"]
 
-    # Primary source: free global OpenStreetMap-derived vector tiles. No key or paid plan.
-    try:
-        tile_result = await openfreemap_road_tiles(lat, lon, radius)
-        if tile_result.get("count", 0) > 0:
-            road_response_cache[cache_key] = {"time": now, "data": tile_result}
-            return tile_result
-    except Exception as exc:
-        print(f"OpenFreeMap road lookup failed near {lat:.3f},{lon:.3f}: {type(exc).__name__}: {exc}")
-
-    # Fallback: public Overpass endpoints, which can occasionally be busy.
+    # Use the OpenStreetMap road-data query service first; cache every successful result.
     # Ask for all mapped highway classes first; rural roads and local streets
     # are not consistently tagged with the narrower list used by older versions.
     query = (
@@ -430,6 +328,51 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
             except Exception as exc:
                 errors.append(f"{endpoint}: {type(exc).__name__}: {exc}")
                 continue
+
+    # Last-resort fallback: ask the public OSRM demo for a small set of real road routes.
+    # This is deliberately one request per cache miss; it is a best-effort fallback, not a SLA.
+    try:
+        seed = int(hashlib.sha256(f"{round(lat, 2)}:{round(lon, 2)}".encode()).hexdigest()[:8], 16)
+        rng = random.Random(seed)
+        lat_delta = rng.uniform(0.0025, 0.0045)
+        lon_delta = lat_delta / max(0.2, math.cos(math.radians(lat)))
+        direction = rng.uniform(0, math.tau)
+        start_lat = max(-85, min(85, lat + math.sin(direction) * lat_delta))
+        start_lon = max(-180, min(180, lon + math.cos(direction) * lon_delta))
+        end_lat = max(-85, min(85, lat - math.sin(direction) * lat_delta))
+        end_lon = max(-180, min(180, lon - math.cos(direction) * lon_delta))
+        route_url = (
+            f"https://router.project-osrm.org/route/v1/driving/"
+            f"{start_lon:.6f},{start_lat:.6f};{end_lon:.6f},{end_lat:.6f}"
+        )
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, connect=4.0),
+            follow_redirects=True,
+            headers={"User-Agent": "WorldGame/1.0 (road-traffic fallback; OpenStreetMap attribution)"}
+        ) as client:
+            route_response = await client.get(route_url, params={
+                "overview": "full", "geometries": "geojson", "alternatives": "3", "steps": "false"
+            })
+        route_response.raise_for_status()
+        route_payload = route_response.json()
+        route_ways = []
+        for route_index, route in enumerate(route_payload.get("routes", [])):
+            coords = (route.get("geometry") or {}).get("coordinates") or []
+            points = [{"lat": float(p[1]), "lon": float(p[0])}
+                      for p in coords if isinstance(p, (list, tuple)) and len(p) >= 2]
+            if len(points) >= 2:
+                route_ways.append({
+                    "id": f"osrm-{route_index}",
+                    "tags": {"highway": "road", "name": "OpenStreetMap route"},
+                    "geometry": points
+                })
+        if route_ways:
+            result = {"ways": route_ways, "count": len(route_ways), "source": "OSRM / OpenStreetMap", "fallback": True}
+            road_response_cache[cache_key] = {"time": now, "data": result}
+            return result
+    except Exception as exc:
+        errors.append(f"OSRM route fallback: {type(exc).__name__}: {exc}")
+        print(f"OSRM route fallback failed near {lat:.3f},{lon:.3f}: {type(exc).__name__}: {exc}")
 
     # If every upstream is down, reuse older nearby cached roads rather than fail hard.
     stale = []
