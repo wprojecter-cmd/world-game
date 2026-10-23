@@ -215,7 +215,8 @@ async function fetchTrafficRoads(force=false){
   for(const way of (data.ways||[])){const pts=(way.geometry||[]).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon));if(pts.length<2)continue;const segments=[];let length=0;for(let i=1;i<pts.length;i++){const d=roadDistance(pts[i-1],pts[i]);if(d<1)continue;segments.push({a:pts[i-1],b:pts[i],length:d,heading:trafficBearing(pts[i-1],pts[i])});length+=d}if(length>45)roads.push({points:pts,segments,length,highway:way.tags?.highway||'road'})}
   if(!roads.length){
    trafficState.active=false;
-   console.info('Road traffic paused: no road data is currently available in this area.');
+   const detail=(data.errors||[]).join(' | ');
+   console.warn('Road traffic has no usable road data. API response:',{count:data.count,unavailable:data.unavailable,stale:data.stale,errors:detail||undefined,lat:position.lat,lon:position.lon,radius});
    return;
   }
   const oldCars=trafficState.cars;oldCars.forEach(c=>c.parts.forEach(p=>viewer?.entities.remove(p.entity)));trafficState.cars=[];trafficState.roads=roads;
