@@ -259,6 +259,45 @@ async def release_country(user=Depends(current_user)):
         await db.users.update_one({"_id": user["_id"]}, {"$set": {"country_code": None, "spawn": None}})
     return {"ok": True}
 
+
+road_response_cache = {}
+
+@app.get("/api/roads")
+async def road_network(lat: float, lon: float, radius: int = 1200):
+    """Return nearby OSM road geometries for client-side, road-constrained traffic."""
+    lat = max(-85.0, min(85.0, lat))
+    lon = max(-180.0, min(180.0, lon))
+    radius = max(500, min(4500, int(radius)))
+    cache_key = (round(lat, 2), round(lon, 2), int(radius / 250))
+    cached = road_response_cache.get(cache_key)
+    now = time.monotonic()
+    if cached and now - cached[0] < 900:
+        return cached[1]
+    query = f"""[out:json][timeout:18];way(around:{radius},{lat:.6f},{lon:.6f})[highway~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|road)$"][area!~"yes"];out tags geom;"""
+    try:
+        async with httpx.AsyncClient(timeout=22, follow_redirects=True,
+                                     headers={"User-Agent": "WorldGame/1.0 road-traffic demo"}) as client:
+            response = await client.post("https://overpass-api.de/api/interpreter", data={"data": query})
+            response.raise_for_status()
+            payload = response.json()
+        ways = []
+        for way in payload.get("elements", []):
+            geometry = way.get("geometry") or []
+            if len(geometry) >= 2:
+                ways.append({"id": way.get("id"), "tags": way.get("tags", {}),
+                             "geometry": [{"lat": p["lat"], "lon": p["lon"]} for p in geometry
+                                          if "lat" in p and "lon" in p]})
+        result = {"ways": ways, "count": len(ways), "source": "OpenStreetMap"}
+        road_response_cache[cache_key] = (now, result)
+        if len(road_response_cache) > 200:
+            for key, value in list(road_response_cache.items()):
+                if now - value[0] > 1800:
+                    road_response_cache.pop(key, None)
+        return result
+    except Exception as exc:
+        print(f"OSM road lookup failed near {lat:.3f},{lon:.3f}: {exc}")
+        raise HTTPException(502, "Не удалось загрузить дорожную сеть OpenStreetMap. Повторите попытку позже.")
+
 @app.get("/api/players")
 async def players(user=Depends(current_user)):
     if db is None:
