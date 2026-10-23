@@ -243,10 +243,25 @@ async function fetchTrafficRoads(force=false){
    else data.errors=[...(data.errors||[]),...(direct.errors||[])];
   }
   const roads=[];
-  for(const way of (data.ways||[])){const pts=(way.geometry||[]).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon));if(pts.length<2)continue;const segments=[];let length=0;for(let i=1;i<pts.length;i++){const d=roadDistance(pts[i-1],pts[i]);if(d<1)continue;segments.push({a:pts[i-1],b:pts[i],length:d,heading:trafficBearing(pts[i-1],pts[i])});length+=d}if(length>45)roads.push({points:pts,segments,length,highway:way.tags?.highway||'road'})}
+  // Keep only road segments close to the player's current position. OSRM fallback
+  // may return a long route, so spawning cars along the whole geometry puts them far away.
+  const localTrafficRadius=mode==='aircraft'?Math.max(650,Math.min(1800,Number(position.alt)*1.2+650)):650;
+  for(const way of (data.ways||[])){
+   const pts=(way.geometry||[]).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon));
+   if(pts.length<2)continue;
+   const segments=[];let length=0;
+   for(let i=1;i<pts.length;i++){
+    const a=pts[i-1],b=pts[i],d=roadDistance(a,b);if(d<1)continue;
+    const mid={lat:(a.lat+b.lat)/2,lon:(a.lon+b.lon)/2};
+    const near=Math.min(roadDistance(position,a),roadDistance(position,b),roadDistance(position,mid));
+    if(near>localTrafficRadius)continue;
+    segments.push({a,b,length:d,heading:trafficBearing(a,b)});length+=d;
+   }
+   if(length>45)roads.push({points:pts,segments,length,highway:way.tags?.highway||'road'});
+  }
   if(!roads.length){
    trafficState.active=false;
-   const detail=(data.errors||[]).join(' | ') || 'Источники не сообщили подробную ошибку';
+   const detail=(data.errors||[]).join(' | ') || ('Источник='+(data.source||'unknown')+' fallback='+String(!!data.fallback)+'; источники не сообщили подробную ошибку');
    console.warn('ROAD TRAFFIC DIAGNOSTICS', 'count='+String(data.count), 'unavailable='+String(data.unavailable), 'stale='+String(data.stale), 'lat='+position.lat, 'lon='+position.lon, 'radius='+radius, 'serverErrors='+detail);
    return;
   }
