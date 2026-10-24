@@ -207,14 +207,14 @@ function makeTrafficCar(index){
  // Cache load status so a failed external model is logged once, not every frame.
  if(!trafficModelLoadState.has(modelUri)){
   trafficModelLoadState.set(modelUri,'loading');
-  entity.model.readyEvent.addEventListener?.(()=>trafficModelLoadState.set(modelUri,'ready'));
+  // ModelGraphics loads asynchronously; the first visible frame uses the road position immediately.
  }
  return {style,parts:[{entity,offset:[0,0,0]}],roadIndex:0,distance:0,speed:9+Math.random()*5,last:{lat:position.lat,lon:position.lon,heading:0}};
 }
 function placeTrafficCar(car,point){
  const cart=Cesium.Cartesian3.fromDegrees(point.lon,point.lat,2);
  // Cesium's local +Y axis points north at heading zero, matching our car's long axis.
- const hpr=new Cesium.HeadingPitchRoll(point.heading,0,0);
+ const hpr=new Cesium.HeadingPitchRoll(point.heading+Cesium.Math.PI_OVER_TWO,0,0);
  const orientation=Cesium.Transforms.headingPitchRollQuaternion(cart,hpr);
  let ground=0;
  try{const h=viewer.scene.globe.getHeight(Cesium.Cartographic.fromDegrees(point.lon,point.lat));if(Number.isFinite(h))ground=h}catch{}
@@ -288,7 +288,7 @@ async function fetchTrafficRoads(force=false){
    return;
   }
   const oldCars=trafficState.cars;oldCars.forEach(c=>c.parts.forEach(p=>viewer?.entities.remove(p.entity)));trafficState.cars=[];trafficState.roads=roads;
-  const cap=mode==='aircraft'? (position.alt<=350?42:position.alt<=700?28:16):22;
+  const cap=mode==='aircraft'? (position.alt<=350?24:position.alt<=700?16:10):14;
   for(let i=0;i<cap;i++){const road=roads[Math.floor(Math.random()*roads.length)];if(!road||!road.length)continue;const car=makeTrafficCar(i);car.roadIndex=roads.indexOf(road);car.distance=Math.random()*road.length;trafficState.cars.push(car);placeTrafficCar(car,trafficPointAt(road,car.distance))}
   trafficState.active=true;viewer.scene.requestRender();
  }catch(e){console.warn('Road traffic temporarily unavailable:',e?.message||e);trafficState.lastFetch=Date.now()}finally{trafficState.fetching=false}
