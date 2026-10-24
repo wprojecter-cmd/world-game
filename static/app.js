@@ -182,14 +182,19 @@ function trafficPointAt(road,distance){
 }
 function trafficOffset(lat,lon,heading,forward,lateral){const north=forward*Math.cos(heading)-lateral*Math.sin(heading),east=forward*Math.sin(heading)+lateral*Math.cos(heading);return {lat:lat+north/111320,lon:lon+east/(111320*Math.max(.15,Math.cos(lat*Math.PI/180)))}}
 function trafficEntityPoint(v,offset,height){const p=trafficOffset(v.lat,v.lon,v.heading,offset[1],offset[0]);return Cesium.Cartesian3.fromDegrees(p.lon,p.lat,height+offset[2])}
+// Real GLB traffic vehicles. CarConcept is the passenger-car model; the two Cesium
+// samples provide additional vehicle silhouettes. Browser HTTP cache reuses downloaded assets.
 const trafficModelUris=[
+ 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/CarConcept/GLB/CarConcept.glb',
  'https://raw.githubusercontent.com/CesiumGS/cesium/main/Apps/SampleData/models/CesiumMilkTruck/CesiumMilkTruck.glb',
  'https://raw.githubusercontent.com/CesiumGS/cesium/main/Apps/SampleData/models/GroundVehicle/GroundVehicle.glb'
 ];
 const trafficModelLoadState=new Map();
 function makeTrafficCar(index){
  const style=trafficStyles[index%trafficStyles.length];
- const modelUri=trafficModelUris[index%4===0?1:0];
+ // Mostly passenger cars; keep a few different vehicles for a natural-looking mix.
+ const modelIndex=index%7===0?1:index%11===0?2:0;
+ const modelUri=trafficModelUris[modelIndex];
  const base=Cesium.Cartesian3.fromDegrees(position.lon,position.lat,2);
  const entity=viewer.entities.add({
   id:'traffic-'+index,
@@ -197,19 +202,15 @@ function makeTrafficCar(index){
   orientation:Cesium.Transforms.headingPitchRollQuaternion(base,new Cesium.HeadingPitchRoll(0,0,0)),
   model:{
    uri:modelUri,
-   scale:modelUri===trafficModelUris[0]?0.72:1,
-   minimumPixelSize:16,
-   maximumScale:8,
+   scale:modelIndex===0?1:0.72,
+   minimumPixelSize:14,
+   maximumScale:7,
    runAnimations:true,
    show:true
   }
  });
- // Cache load status so a failed external model is logged once, not every frame.
- if(!trafficModelLoadState.has(modelUri)){
-  trafficModelLoadState.set(modelUri,'loading');
-  // ModelGraphics loads asynchronously; the first visible frame uses the road position immediately.
- }
- return {style,parts:[{entity,offset:[0,0,0]}],roadIndex:0,distance:0,speed:9+Math.random()*5,last:{lat:position.lat,lon:position.lon,heading:0}};
+ if(!trafficModelLoadState.has(modelUri))trafficModelLoadState.set(modelUri,'loading');
+ return {style,parts:[{entity,offset:[0,0,0]}],roadIndex:0,distance:0,speed:8+Math.random()*8,last:{lat:position.lat,lon:position.lon,heading:0}};
 }
 function placeTrafficCar(car,point){
  const cart=Cesium.Cartesian3.fromDegrees(point.lon,point.lat,2);
@@ -288,7 +289,7 @@ async function fetchTrafficRoads(force=false){
    return;
   }
   const oldCars=trafficState.cars;oldCars.forEach(c=>c.parts.forEach(p=>viewer?.entities.remove(p.entity)));trafficState.cars=[];trafficState.roads=roads;
-  const cap=mode==='aircraft'? (position.alt<=350?24:position.alt<=700?16:10):14;
+  const cap=mode==='aircraft'? (position.alt<=350?30:position.alt<=700?20:12):24;
   for(let i=0;i<cap;i++){const road=roads[Math.floor(Math.random()*roads.length)];if(!road||!road.length)continue;const car=makeTrafficCar(i);car.roadIndex=roads.indexOf(road);car.distance=Math.random()*road.length;trafficState.cars.push(car);placeTrafficCar(car,trafficPointAt(road,car.distance))}
   trafficState.active=true;viewer.scene.requestRender();
  }catch(e){console.warn('Road traffic temporarily unavailable:',e?.message||e);trafficState.lastFetch=Date.now()}finally{trafficState.fetching=false}
