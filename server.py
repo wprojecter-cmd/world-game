@@ -8,6 +8,7 @@ import random
 import json
 import struct
 import math
+from collections import deque
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -36,6 +37,8 @@ online_sockets: dict[str, WebSocket] = {}
 socket_users: dict[str, dict] = {}
 socket_lock = asyncio.Lock()
 ai_task = None
+# In-memory recent request logs for safe diagnostics; resets on each deployment/restart.
+request_log_buffer = deque(maxlen=2000)
 
 class AuthPayload(BaseModel):
     username: str = Field(min_length=3, max_length=24, pattern=r"^[A-Za-z0-9_]+$")
@@ -171,6 +174,76 @@ async def home():
 @app.get("/logs")
 async def logs_page():
     return FileResponse(os.path.join(APP_DIR, "static", "logs.html"))
+
+@app.middleware("http")
+async def collect_request_logs(request: Request, call_next):
+    started = time.monotonic()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    except Exception as exc:
+        request_log_buffer.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": f"{request.method} {request.url.path} -> {type(exc).__name__}: {str(exc)[:300]}",
+            "labels": [{"name": "level", "value": "error"}, {"name": "type", "value": "app"},
+                       {"name": "method", "value": request.method}, {"name": "path", "value": request.url.path},
+                       {"name": "statusCode", "value": "500"}]
+        })
+        raise
+    finally:
+        elapsed_ms = round((time.monotonic() - started) * 1000)
+        level = "error" if status_code >= 500 else ("warning" if status_code >= 400 else "info")
+        request_log_buffer.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": f"{request.method} {request.url.path} -> HTTP {status_code} ({elapsed_ms} ms)",
+            "labels": [{"name": "level", "value": level}, {"name": "type", "value": "request"},
+                       {"name": "method", "value": request.method}, {"name": "path", "value": request.url.path},
+                       {"name": "statusCode", "value": str(status_code)}]
+        })
+
+@app.get("/api/render-logs")
+async def get_render_logs(
+    hours: int = 24,
+    limit: int = 100,
+    text_filter: str = "",
+    level: str = "",
+    log_type: str = "app",
+    user=Depends(current_user)
+):
+    allowed = {x.strip().lower() for x in os.getenv("LOGS_ALLOWED_USERS", "").split(",") if x.strip()}
+    username = str(user.get("username", "")).lower()
+    if not allowed:
+        raise HTTPException(503, "Добавьте LOGS_ALLOWED_USERS в Environment Variables (имена пользователей через запятую).")
+    if username not in allowed:
+        raise HTTPException(403, "Нет доступа к диагностическим логам.")
+    hours = max(1, min(int(hours), 168))
+    limit = max(1, min(int(limit), 200))
+    cutoff = datetime.now(timezone.utc).timestamp() - hours * 3600
+    q = text_filter.strip().lower()[:200]
+    wanted_level = level.strip().lower()
+    wanted_type = log_type.strip().lower()
+    entries = []
+    for entry in reversed(request_log_buffer):
+        try:
+            ts = datetime.fromisoformat(entry["timestamp"]).timestamp()
+        except (KeyError, TypeError, ValueError):
+            continue
+        labels = entry.get("labels", [])
+        values = {item.get("name"): item.get("value") for item in labels}
+        if ts < cutoff:
+            continue
+        if wanted_type and values.get("type") != wanted_type:
+            continue
+        if wanted_level and values.get("level") != wanted_level:
+            continue
+        if q and q not in (entry.get("message", "") + " " + json.dumps(labels)).lower():
+            continue
+        entries.append(entry)
+        if len(entries) >= limit:
+            break
+    return {"logs": entries, "count": len(entries), "source": "world-game-in-memory", "note": "Только новые запросы этого процесса; не исторические логи Render."}
 
 @app.get("/api/health")
 async def health():
