@@ -327,66 +327,87 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
                 errors.append(f"{endpoint}: {type(exc).__name__}: {exc}")
                 continue
 
-    # Last-resort fallback: request routes that START at the player's location.
-    # Earlier we routed between two random points, which often produced a route
-    # several hundred metres away and left the local traffic filter with zero segments.
+    # Last-resort fallback: snap the player to the nearest routable road first.
+    # OSRM can snap a raw coordinate to a road far away; use its nearest service
+    # explicitly and route outward from that snapped road coordinate.
     try:
-        route_ways = []
-        destinations = [
-            (lat + 0.0040, lon),
-            (lat - 0.0040, lon),
-            (lat, lon + 0.0040 / max(0.2, math.cos(math.radians(lat)))),
-            (lat, lon - 0.0040 / max(0.2, math.cos(math.radians(lat)))),
-        ]
-        async def get_route(dest_lat, dest_lon, route_index):
-            dest_lat = max(-85, min(85, dest_lat))
-            dest_lon = max(-180, min(180, dest_lon))
-            route_url = (
-                f"https://router.project-osrm.org/route/v1/driving/"
-                f"{lon:.6f},{lat:.6f};{dest_lon:.6f},{dest_lat:.6f}"
+        base_url = "https://router.project-osrm.org"
+        headers = {"User-Agent": "WorldGame/1.0 (road traffic; OpenStreetMap attribution)"}
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(7.0, connect=3.0),
+            follow_redirects=True,
+            headers=headers
+        ) as client:
+            nearest_response = await client.get(
+                f"{base_url}/nearest/v1/driving/{lon:.6f},{lat:.6f}",
+                params={"number": 5, "generate_hints": "false"}
             )
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(7.0, connect=3.0),
-                follow_redirects=True,
-                headers={"User-Agent": "WorldGame/1.0 (road traffic; OpenStreetMap attribution)"}
-            ) as client:
-                response = await client.get(route_url, params={
-                    "overview": "full", "geometries": "geojson", "alternatives": "false", "steps": "false"
-                })
-            response.raise_for_status()
-            payload = response.json()
-            result_ways = []
-            for route in payload.get("routes", []):
-                coords = (route.get("geometry") or {}).get("coordinates") or []
-                points = [{"lat": float(p[1]), "lon": float(p[0])}
-                          for p in coords if isinstance(p, (list, tuple)) and len(p) >= 2]
-                if len(points) >= 2:
-                    result_ways.append({
-                        "id": f"osrm-local-{route_index}",
-                        "tags": {"highway": "road", "name": "OpenStreetMap nearby road"},
-                        "geometry": points
-                    })
-            return result_ways
-        route_results = await asyncio.gather(
-            *(get_route(dlat, dlon, idx) for idx, (dlat, dlon) in enumerate(destinations)),
-            return_exceptions=True
-        )
-        for route_result in route_results:
-            if isinstance(route_result, Exception):
-                errors.append(f"OSRM nearby route: {type(route_result).__name__}: {route_result}")
+            nearest_response.raise_for_status()
+            nearest_payload = nearest_response.json()
+            waypoints = nearest_payload.get("waypoints") or []
+            waypoints = sorted(
+                [w for w in waypoints if w.get("location") and len(w["location"]) >= 2],
+                key=lambda w: float(w.get("distance", 1e12))
+            )
+            # Only accept a snap within 3 km; farther away is not local traffic.
+            waypoints = [w for w in waypoints if float(w.get("distance", 1e12)) <= 3000]
+            if not waypoints:
+                errors.append("OSRM nearest: no routable road within 3000 metres")
             else:
-                route_ways.extend(route_result)
-        if route_ways:
-            return {
-                "ways": route_ways,
-                "count": len(route_ways),
-                "source": "OSRM / OpenStreetMap (routes anchored at player)",
-                "fallback": True,
-                "errors": errors
-            }
+                snap_lon, snap_lat = map(float, waypoints[0]["location"])
+                destinations = [
+                    (snap_lat + 0.0040, snap_lon),
+                    (snap_lat - 0.0040, snap_lon),
+                    (snap_lat, snap_lon + 0.0040 / max(0.2, math.cos(math.radians(snap_lat)))),
+                    (snap_lat, snap_lon - 0.0040 / max(0.2, math.cos(math.radians(snap_lat)))),
+                ]
+                async def get_route(dest_lat, dest_lon, route_index):
+                    dest_lat = max(-85, min(85, dest_lat))
+                    dest_lon = max(-180, min(180, dest_lon))
+                    route_url = (
+                        f"{base_url}/route/v1/driving/"
+                        f"{snap_lon:.6f},{snap_lat:.6f};{dest_lon:.6f},{dest_lat:.6f}"
+                    )
+                    response = await client.get(route_url, params={
+                        "overview": "full", "geometries": "geojson",
+                        "alternatives": "false", "steps": "false"
+                    })
+                    response.raise_for_status()
+                    payload = response.json()
+                    result_ways = []
+                    for route in payload.get("routes", []):
+                        coords = (route.get("geometry") or {}).get("coordinates") or []
+                        points = [{"lat": float(p[1]), "lon": float(p[0])}
+                                  for p in coords if isinstance(p, (list, tuple)) and len(p) >= 2]
+                        if len(points) >= 2:
+                            result_ways.append({
+                                "id": f"osrm-local-{route_index}",
+                                "tags": {"highway": "road", "name": "OpenStreetMap nearby road"},
+                                "geometry": points
+                            })
+                    return result_ways
+                route_results = await asyncio.gather(
+                    *(get_route(dlat, dlon, idx) for idx, (dlat, dlon) in enumerate(destinations)),
+                    return_exceptions=True
+                )
+                route_ways = []
+                for route_result in route_results:
+                    if isinstance(route_result, Exception):
+                        errors.append(f"OSRM nearby route: {type(route_result).__name__}: {route_result}")
+                    else:
+                        route_ways.extend(route_result)
+                if route_ways:
+                    return {
+                        "ways": route_ways,
+                        "count": len(route_ways),
+                        "source": "OSRM / OpenStreetMap (nearest-road anchored)",
+                        "fallback": True,
+                        "snap_distance_m": round(float(waypoints[0].get("distance", 0)), 1),
+                        "errors": errors
+                    }
     except Exception as exc:
-        errors.append(f"OSRM route fallback: {type(exc).__name__}: {exc}")
-        print(f"OSRM route fallback failed near {lat:.3f},{lon:.3f}: {type(exc).__name__}: {exc}")
+        errors.append(f"OSRM nearest/route fallback: {type(exc).__name__}: {exc}")
+        print(f"OSRM nearest/route fallback failed near {lat:.3f},{lon:.3f}: {type(exc).__name__}: {exc}")
 
     # If every upstream is down, reuse older nearby cached roads rather than fail hard.
     stale = []
