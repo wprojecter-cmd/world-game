@@ -182,50 +182,34 @@ function trafficPointAt(road,distance){
 }
 function trafficOffset(lat,lon,heading,forward,lateral){const north=forward*Math.cos(heading)-lateral*Math.sin(heading),east=forward*Math.sin(heading)+lateral*Math.cos(heading);return {lat:lat+north/111320,lon:lon+east/(111320*Math.max(.15,Math.cos(lat*Math.PI/180)))}}
 function trafficEntityPoint(v,offset,height){const p=trafficOffset(v.lat,v.lon,v.heading,offset[1],offset[0]);return Cesium.Cartesian3.fromDegrees(p.lon,p.lat,height+offset[2])}
+const trafficModelUris=[
+ 'https://raw.githubusercontent.com/CesiumGS/cesium/main/Apps/SampleData/models/CesiumMilkTruck/CesiumMilkTruck.glb',
+ 'https://raw.githubusercontent.com/CesiumGS/cesium/main/Apps/SampleData/models/GroundVehicle/GroundVehicle.glb'
+];
+const trafficModelLoadState=new Map();
 function makeTrafficCar(index){
- const style=trafficStyles[index%trafficStyles.length],parts=[];
- const add=(id,offset,dimensions,material,shape='box')=>{
-  const base=Cesium.Cartesian3.fromDegrees(position.lon,position.lat,2);
-  const entity=viewer.entities.add({
-   id:'traffic-'+index+'-'+id,
-   position:base,
-   orientation:Cesium.Transforms.headingPitchRollQuaternion(base,new Cesium.HeadingPitchRoll(0,0,0)),
-   [shape]:shape==='ellipsoid'
-    ? {radii:new Cesium.Cartesian3(...dimensions),material,outline:false}
-    : {dimensions:new Cesium.Cartesian3(...dimensions),material,outline:false}
-  });
-  parts.push({entity,offset});
- };
- const paint=hex=>Cesium.Color.fromCssColorString(hex);
- const body=paint(style.body),roof=paint(style.roof);
- const glass=Cesium.Color.fromBytes(48,91,116,235);
- const rubber=Cesium.Color.fromBytes(24,27,30),rim=Cesium.Color.fromBytes(155,165,174);
- const headlight=Cesium.Color.fromBytes(255,244,190),tail=Cesium.Color.fromBytes(215,38,32);
- // Local +Y is the direction of travel: the long axis now follows the road bearing.
- add('lower-body',[0,0,0.66],[1.78,4.15,0.72],body);
- add('hood',[0,-1.25,0.91],[1.62,1.15,0.27],body);
- add('trunk',[0,1.48,0.91],[1.58,0.78,0.26],body);
- add('cabin',[0,0.05,1.18],[1.48,2.0,0.62],roof);
- add('windshield-front',[0,-0.58,1.48],[1.30,0.08,0.36],glass);
- add('windshield-rear',[0,0.79,1.47],[1.28,0.08,0.34],glass);
- add('side-window-left',[-0.755,0.06,1.46],[0.055,1.08,0.31],glass);
- add('side-window-right',[0.755,0.06,1.46],[0.055,1.08,0.31],glass);
- add('front-bumper',[0,-2.09,0.56],[1.70,0.16,0.22],Cesium.Color.fromBytes(55,58,62));
- add('rear-bumper',[0,2.09,0.56],[1.66,0.16,0.22],Cesium.Color.fromBytes(55,58,62));
- add('front-grille',[0,-2.13,0.73],[0.55,0.045,0.19],Cesium.Color.fromBytes(35,39,42));
- for(const side of [-1,1]){
-  add('headlight-'+side,[side*0.59,-2.12,0.78],[0.30,0.07,0.14],headlight);
-  add('taillight-'+side,[side*0.59,2.08,0.78],[0.28,0.07,0.17],tail);
-  for(const longitudinal of [-1.28,1.28]){
-   add('tire-'+side+'-'+longitudinal,[side*0.91,longitudinal,0.37],[0.19,0.34,0.34],rubber,'ellipsoid');
-   add('rim-'+side+'-'+longitudinal,[side*1.015,longitudinal,0.37],[0.035,0.17,0.17],rim,'ellipsoid');
+ const style=trafficStyles[index%trafficStyles.length];
+ const modelUri=trafficModelUris[index%4===0?1:0];
+ const base=Cesium.Cartesian3.fromDegrees(position.lon,position.lat,2);
+ const entity=viewer.entities.add({
+  id:'traffic-'+index,
+  position:base,
+  orientation:Cesium.Transforms.headingPitchRollQuaternion(base,new Cesium.HeadingPitchRoll(0,0,0)),
+  model:{
+   uri:modelUri,
+   scale:modelUri===trafficModelUris[0]?0.72:1,
+   minimumPixelSize:16,
+   maximumScale:8,
+   runAnimations:true,
+   show:true
   }
+ });
+ // Cache load status so a failed external model is logged once, not every frame.
+ if(!trafficModelLoadState.has(modelUri)){
+  trafficModelLoadState.set(modelUri,'loading');
+  entity.model.readyEvent.addEventListener?.(()=>trafficModelLoadState.set(modelUri,'ready'));
  }
- if(style.name==='Police'||style.name==='Ambulance'){
-  add('emergency-light-left',[-0.23,0.04,1.57],[0.18,0.26,0.10],Cesium.Color.RED);
-  add('emergency-light-right',[0.23,0.04,1.57],[0.18,0.26,0.10],Cesium.Color.BLUE);
- }
- return {style,parts,roadIndex:0,distance:0,speed:10+Math.random()*7,last:{lat:position.lat,lon:position.lon,heading:0}};
+ return {style,parts:[{entity,offset:[0,0,0]}],roadIndex:0,distance:0,speed:9+Math.random()*5,last:{lat:position.lat,lon:position.lon,heading:0}};
 }
 function placeTrafficCar(car,point){
  const cart=Cesium.Cartesian3.fromDegrees(point.lon,point.lat,2);
@@ -242,15 +226,10 @@ function placeTrafficCar(car,point){
 }
 function clearTraffic(){trafficState.cars.forEach(c=>c.parts.forEach(p=>viewer?.entities.remove(p.entity)));trafficState.cars=[];trafficState.roads=[];trafficState.active=false;if(viewer)viewer.scene.requestRender()}
 async function fetchRoadsDirectFromBrowser(lat,lon,radius){
- const query='[out:json][timeout:18];way(around:'+Math.round(radius)+','+Number(lat).toFixed(6)+','+Number(lon).toFixed(6)+')[highway][highway!~"^(footway|path|steps|pedestrian|cycleway|bridleway|corridor|elevator|proposed|construction)$"];out tags geom;';
- const hosts=[
-  'https://overpass.private.coffee/api/interpreter',
-  'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter'
- ];
- const failures=[];
- for(const host of hosts){
-  const controller=new AbortController(),timeoutId=setTimeout(()=>controller.abort(),18000);
+ const query='[out:json][timeout:8];way(around:'+Math.round(radius)+','+Number(lat).toFixed(6)+','+Number(lon).toFixed(6)+')[highway][highway!~"^(footway|path|steps|pedestrian|cycleway|bridleway|corridor|elevator|proposed|construction)$"];out tags geom;';
+ const hosts=['https://overpass.private.coffee/api/interpreter','https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter'];
+ const attempts=hosts.map(async host=>{
+  const controller=new AbortController(),timeoutId=setTimeout(()=>controller.abort(),6500);
   try{
    const response=await fetch(host+'?data='+encodeURIComponent(query),{method:'GET',mode:'cors',signal:controller.signal,headers:{'Accept':'application/json'}});
    if(!response.ok)throw Error('HTTP '+response.status);
@@ -259,11 +238,12 @@ async function fetchRoadsDirectFromBrowser(lat,lon,radius){
     const geometry=way.geometry||[];
     if(geometry.length>=2)ways.push({id:way.id,tags:way.tags||{},geometry:geometry.filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon))});
    }
-   if(ways.length)return {ways,count:ways.length,source:'OpenStreetMap browser fallback'};
-   failures.push(host+': empty result');
-  }catch(e){failures.push(host+': '+(e?.message||e))}finally{clearTimeout(timeoutId)}
- }
- return {ways:[],count:0,unavailable:true,errors:failures};
+   if(!ways.length)throw Error('empty result');
+   return {ways,count:ways.length,source:'OpenStreetMap browser fallback'};
+  }finally{clearTimeout(timeoutId)}
+ });
+ try{return await Promise.any(attempts)}
+ catch(e){return {ways:[],count:0,unavailable:true,errors:(e.errors||[]).map(x=>x?.message||String(x))}}
 }
 async function fetchTrafficRoads(force=false){
  if(!viewer||trafficState.fetching)return;
