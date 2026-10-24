@@ -226,10 +226,10 @@ function placeTrafficCar(car,point){
 }
 function clearTraffic(){trafficState.cars.forEach(c=>c.parts.forEach(p=>viewer?.entities.remove(p.entity)));trafficState.cars=[];trafficState.roads=[];trafficState.active=false;if(viewer)viewer.scene.requestRender()}
 async function fetchRoadsDirectFromBrowser(lat,lon,radius){
- const query='[out:json][timeout:8];way(around:'+Math.round(radius)+','+Number(lat).toFixed(6)+','+Number(lon).toFixed(6)+')[highway][highway!~"^(footway|path|steps|pedestrian|cycleway|bridleway|corridor|elevator|proposed|construction)$"];out tags geom;';
+ const query='[out:json][timeout:4];way(around:'+Math.round(radius)+','+Number(lat).toFixed(6)+','+Number(lon).toFixed(6)+')[highway][highway!~"^(footway|path|steps|pedestrian|cycleway|bridleway|corridor|elevator|proposed|construction)$"];out tags geom;';
  const hosts=['https://overpass.private.coffee/api/interpreter','https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter'];
  const attempts=hosts.map(async host=>{
-  const controller=new AbortController(),timeoutId=setTimeout(()=>controller.abort(),6500);
+  const controller=new AbortController(),timeoutId=setTimeout(()=>controller.abort(),3000);
   try{
    const response=await fetch(host+'?data='+encodeURIComponent(query),{method:'GET',mode:'cors',signal:controller.signal,headers:{'Accept':'application/json'}});
    if(!response.ok)throw Error('HTTP '+response.status);
