@@ -168,6 +168,10 @@ async def shutdown():
 async def home():
     return FileResponse(os.path.join(APP_DIR, "static", "index.html"))
 
+@app.get("/logs")
+async def logs_page():
+    return FileResponse(os.path.join(APP_DIR, "static", "logs.html"))
+
 @app.get("/api/health")
 async def health():
     mongo_ok = False
