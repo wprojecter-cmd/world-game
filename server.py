@@ -355,11 +355,19 @@ async def road_network(lat: float, lon: float, radius: int = 1200):
                 errors.append("OSRM nearest: no routable road within 3000 metres")
             else:
                 snap_lon, snap_lat = map(float, waypoints[0]["location"])
+                # Explore eight directions so the returned route set branches across
+                # nearby streets instead of placing every car on one corridor.
+                lat_step = 0.0060
+                lon_step = 0.0060 / max(0.2, math.cos(math.radians(snap_lat)))
                 destinations = [
-                    (snap_lat + 0.0040, snap_lon),
-                    (snap_lat - 0.0040, snap_lon),
-                    (snap_lat, snap_lon + 0.0040 / max(0.2, math.cos(math.radians(snap_lat)))),
-                    (snap_lat, snap_lon - 0.0040 / max(0.2, math.cos(math.radians(snap_lat)))),
+                    (snap_lat + lat_step, snap_lon),
+                    (snap_lat - lat_step, snap_lon),
+                    (snap_lat, snap_lon + lon_step),
+                    (snap_lat, snap_lon - lon_step),
+                    (snap_lat + lat_step, snap_lon + lon_step),
+                    (snap_lat + lat_step, snap_lon - lon_step),
+                    (snap_lat - lat_step, snap_lon + lon_step),
+                    (snap_lat - lat_step, snap_lon - lon_step),
                 ]
                 async def get_route(dest_lat, dest_lon, route_index):
                     dest_lat = max(-85, min(85, dest_lat))
