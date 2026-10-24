@@ -276,8 +276,8 @@ async function fetchTrafficRoads(force=false){
   const response=await fetch(url,{headers:token?{Authorization:'Bearer '+token}:{}});
   if(!response.ok)throw Error('OSM roads HTTP '+response.status);
   let data=await response.json();
-  if(!(data.ways||[]).length){
-   console.info('Server road lookup unavailable; trying browser-side OpenStreetMap fallback.');
+  if(!(data.ways||[]).length||data.fallback){
+   console.info('Server returned no local road list (or only a routing fallback); trying direct OpenStreetMap roads.');
    const direct=await fetchRoadsDirectFromBrowser(position.lat,position.lon,radius);
    if((direct.ways||[]).length)data=direct;
    else data.errors=[...(data.errors||[]),...(direct.errors||[])];
@@ -300,7 +300,9 @@ async function fetchTrafficRoads(force=false){
    if(length>45)roads.push({points:pts,segments,length,highway:way.tags?.highway||'road'});
   }
   if(!roads.length){
-   trafficState.active=false;
+   // Do not freeze or remove already visible cars just because a refresh failed.
+   if(trafficState.cars.length&&trafficState.roads.length){trafficState.active=true}
+   else{trafficState.active=false}
    const detail=(data.errors||[]).join(' | ') || ('Источник='+(data.source||'unknown')+' fallback='+String(!!data.fallback)+'; источники не сообщили подробную ошибку');
    console.warn('ROAD TRAFFIC DIAGNOSTICS', 'count='+String(data.count), 'unavailable='+String(data.unavailable), 'stale='+String(data.stale), 'lat='+position.lat, 'lon='+position.lon, 'radius='+radius, 'serverErrors='+detail);
    return;
