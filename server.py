@@ -245,6 +245,55 @@ async def get_render_logs(
             break
     return {"logs": entries, "count": len(entries), "source": "world-game-in-memory", "note": "Только новые запросы этого процесса; не исторические логи Render."}
 
+@app.get("/test_logs")
+async def test_logs_page():
+    return FileResponse(os.path.join(APP_DIR, "static", "test_logs.html"))
+
+@app.get("/api/test-render-logs")
+async def test_render_logs(hours: int = 1, limit: int = 30, user=Depends(current_user)):
+    """Temporary admin-only test of the official Render REST Logs API."""
+    allowed = {x.strip().lower() for x in os.getenv("RENDER_LOGS_ALLOWED_USERS", "").split(",") if x.strip()}
+    username = str(user.get("username", "")).lower()
+    if not allowed or username not in allowed:
+        raise HTTPException(403, "Нет доступа к тестовым логам. Настройте RENDER_LOGS_ALLOWED_USERS.")
+    api_key = os.getenv("RENDER_API_KEY", "")
+    owner_id = os.getenv("RENDER_OWNER_ID", "")
+    service_id = os.getenv("RENDER_SERVICE_ID", "")
+    if not api_key or not owner_id or not service_id:
+        raise HTTPException(503, "Добавьте RENDER_API_KEY, RENDER_OWNER_ID и RENDER_SERVICE_ID в Render Environment.")
+    hours = max(1, min(int(hours), 24))
+    limit = max(1, min(int(limit), 100))
+    end = datetime.now(timezone.utc)
+    start = end.timestamp() - hours * 3600
+    params = {
+        "ownerId": owner_id,
+        "resource": service_id,
+        "startTime": datetime.fromtimestamp(start, timezone.utc).isoformat().replace("+00:00", "Z"),
+        "endTime": end.isoformat().replace("+00:00", "Z"),
+        "direction": "backward",
+        "limit": limit,
+    }
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            response = await client.get(
+                "https://api.render.com/v1/logs",
+                params=params,
+                headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+            )
+        except httpx.HTTPError:
+            raise HTTPException(502, "Не удалось связаться с Render Logs API.")
+    if response.status_code in (401, 403):
+        raise HTTPException(502, "Render отклонил API-ключ или у ключа нет доступа к этим логам.")
+    if response.status_code >= 400:
+        raise HTTPException(502, f"Render Logs API вернул HTTP {response.status_code}. Проверьте owner ID, service ID и параметры.")
+    try:
+        payload = response.json()
+    except ValueError:
+        raise HTTPException(502, "Render Logs API вернул некорректный JSON.")
+    logs = payload.get("logs", []) if isinstance(payload, dict) else payload if isinstance(payload, list) else []
+    return {"ok": True, "source": "render-public-rest-api", "count": len(logs), "logs": logs}
+
+
 @app.get("/api/health")
 async def health():
     mongo_ok = False
