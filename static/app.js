@@ -265,7 +265,7 @@ async function fetchTrafficRoads(force=false){
   const roads=[];
   // Keep only road segments close to the player's current position. OSRM fallback
   // may return a long route, so spawning cars along the whole geometry puts them far away.
-  const localTrafficRadius=mode==='aircraft'?Math.max(650,Math.min(1800,Number(position.alt)*1.2+650)):650;
+  const localTrafficRadius=data.fallback?3000:(mode==='aircraft'?Math.max(650,Math.min(1800,Number(position.alt)*1.2+650)):650);
   for(const way of (data.ways||[])){
    const pts=(way.geometry||[]).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon));
    if(pts.length<2)continue;
