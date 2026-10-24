@@ -302,7 +302,7 @@ function updateRoadTraffic(dt){
  trafficLastFrame=now;
  const eligible=mode==='human'||(mode==='aircraft'&&Number(position.alt)<=1000);
  if(!viewer||!eligible){if(trafficState.active||trafficState.cars.length)clearTraffic();return}
- if(!trafficState.active){if(Date.now()-trafficState.lastFetch>45000)fetchTrafficRoads().catch(e=>console.warn('Road traffic request failed:',e?.message||e));return}
+ if(!trafficState.active){if(Date.now()-trafficState.lastFetch>8000)fetchTrafficRoads().catch(e=>console.warn('Road traffic request failed:',e?.message||e));return}
  if(Date.now()-trafficState.lastFetch>45000&&roadDistance({lat:trafficState.lastLat,lon:trafficState.lastLon},position)>1200)fetchTrafficRoads().catch(console.warn);
  for(const car of trafficState.cars){const road=trafficState.roads[car.roadIndex];if(!road)continue;car.distance=(car.distance+car.speed*trafficDt)%road.length;placeTrafficCar(car,trafficPointAt(road,car.distance))}
  if(viewer) viewer.scene.requestRender();
