@@ -198,7 +198,7 @@ async def collect_request_logs(request: Request, call_next):
         request_log_buffer.append({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "message": f"{request.method} {request.url.path} -> HTTP {status_code} ({elapsed_ms} ms)",
-            "labels": [{"name": "level", "value": level}, {"name": "type", "value": "request"},
+            "labels": [{"name": "level", "value": level}, {"name": "type", "value": "app"},
                        {"name": "method", "value": request.method}, {"name": "path", "value": request.url.path},
                        {"name": "statusCode", "value": str(status_code)}]
         })
