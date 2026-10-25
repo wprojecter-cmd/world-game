@@ -18,3 +18,5 @@
 .loading-copy h2{margin:7px 0;font-size:clamp(22px,4vw,34px)}.loading-copy p{color:#b9cee0;margin:7px 0 15px}.loading-copy>small{display:block;margin-top:10px;color:#91aac0}.loading-track{height:8px;border-radius:20px;background:#ffffff1a;overflow:hidden}.loading-track span{display:block;width:65%;height:100%;border-radius:20px;background:linear-gradient(90deg,#248cff,#66e2f3);box-shadow:0 0 18px #2faaff;animation:world-loading-pulse 2.2s ease-in-out infinite alternate}
 .loading-music{margin-top:20px;border:1px solid #68c9ff66;border-radius:12px;background:#0d2b43;color:#e9f8ff;padding:11px 15px;cursor:pointer}.loading-music:hover{background:#16415e}
 @keyframes world-loading-pulse{from{width:28%}to{width:92%}}
+
+.loading-aircraft-model{position:absolute;inset:4% 8%;width:84%;height:92%;--poster-color:transparent;background:transparent;filter:drop-shadow(0 14px 14px #001a2b88)}.loading-aircraft-model.hidden{display:none}.loading-art{background-size:cover;background-position:center}
