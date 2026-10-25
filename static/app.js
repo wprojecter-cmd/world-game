@@ -266,15 +266,27 @@ async function fetchNearbyWorldObjects(force=false){
  const query='[out:json][timeout:18];(way["building"](around:'+Math.round(radius)+','+origin.lat.toFixed(6)+','+origin.lon.toFixed(6)+');node["natural"="tree"](around:'+Math.round(radius)+','+origin.lat.toFixed(6)+','+origin.lon.toFixed(6)+');way["landuse"="forest"](around:'+Math.round(radius)+','+origin.lat.toFixed(6)+','+origin.lon.toFixed(6)+'););out body geom;';
  try{
   let payload=null,lastError=null;
-  for(const host of nearbyWorldOverpassHosts){
-   try{
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
+  try{
+   const response=await fetch('/api/world-objects?lat='+encodeURIComponent(origin.lat)+'&lon='+encodeURIComponent(origin.lon)+'&radius='+encodeURIComponent(Math.round(radius)),{headers:{Accept:'application/json'}});
+   if(response.ok){
+    const serverPayload=await response.json();
+    if(Array.isArray(serverPayload.elements))payload=serverPayload;
+    if(payload?.errors?.length)console.warn('World objects server fallback diagnostics:',payload.errors);
+   }else console.warn('World objects server proxy returned HTTP',response.status);
+  }catch(e){lastError=e;console.warn('World objects server proxy failed:',e?.message||e)}
+  if(!payload||!payload.elements.length){
+   for(const host of nearbyWorldOverpassHosts){
     try{
-     const response=await fetch(host+'?data='+encodeURIComponent(query),{mode:'cors',signal:controller.signal,headers:{Accept:'application/json'}});
-     if(!response.ok)throw Error('Overpass HTTP '+response.status);
-     payload=await response.json();if(!Array.isArray(payload.elements))throw Error('Invalid Overpass response');break;
-    }finally{clearTimeout(timer)}
-   }catch(e){lastError=e;console.warn('Nearby 3D objects source failed:',host,e?.message||e)}
+     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
+     try{
+      const response=await fetch(host+'?data='+encodeURIComponent(query),{mode:'cors',signal:controller.signal,headers:{Accept:'application/json'}});
+      if(!response.ok)throw Error('Overpass HTTP '+response.status);
+      const directPayload=await response.json();if(!Array.isArray(directPayload.elements))throw Error('Invalid Overpass response');
+      if(directPayload.elements.length){payload=directPayload;break}
+      payload=directPayload;
+     }finally{clearTimeout(timer)}
+    }catch(e){lastError=e;console.warn('Nearby 3D objects source failed:',host,e?.message||e)}
+   }
   }
   if(!payload)throw lastError||Error('No Overpass endpoint available');
   const ds=new Cesium.CustomDataSource('nearby-3d-buildings-trees');
