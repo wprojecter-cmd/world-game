@@ -387,6 +387,72 @@ async def release_country(user=Depends(current_user)):
     return {"ok": True}
 
 
+
+nearby_objects_cache = {}
+
+@app.get("/api/world-objects")
+async def nearby_world_objects(lat: float, lon: float, radius: int = 300):
+    """Proxy nearby OSM buildings, trees and forest outlines through the server."""
+    lat = max(-85.0, min(85.0, lat))
+    lon = max(-180.0, min(180.0, lon))
+    radius = max(100, min(1200, int(radius)))
+    cache_key = (round(lat, 3), round(lon, 3), int(radius / 100))
+    now = time.monotonic()
+    cached = nearby_objects_cache.get(cache_key)
+    if cached and now - cached["time"] < 1800:
+        return cached["data"]
+
+    query = (
+        f'[out:json][timeout:18];('
+        f'way["building"](around:{radius},{lat:.6f},{lon:.6f});'
+        f'node["natural"="tree"](around:{radius},{lat:.6f},{lon:.6f});'
+        f'way["landuse"="forest"](around:{radius},{lat:.6f},{lon:.6f});'
+        f');out body geom;'
+    )
+    endpoints = [
+        "https://overpass.private.coffee/api/interpreter",
+        "https://lz4.overpass-api.de/api/interpreter",
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://overpass.nchc.org.tw/api/interpreter",
+    ]
+    errors = []
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(10.0, connect=3.5),
+        follow_redirects=True,
+        headers={"User-Agent": "WorldGame/1.0 (nearby 3D map objects; OpenStreetMap attribution)"}
+    ) as client:
+        for endpoint_url in endpoints:
+            try:
+                response = await client.post(endpoint_url, data={"data": query})
+                response.raise_for_status()
+                payload = response.json()
+                elements = payload.get("elements", [])
+                if not isinstance(elements, list):
+                    raise ValueError("Invalid Overpass elements")
+                result = {"elements": elements, "count": len(elements), "source": "OpenStreetMap", "cached": False, "errors": errors}
+                if elements:
+                    nearby_objects_cache[cache_key] = {"time": now, "data": result}
+                if len(nearby_objects_cache) > 250:
+                    for key, value in sorted(nearby_objects_cache.items(), key=lambda item: item[1]["time"]):
+                        if now - value["time"] > 21600 or len(nearby_objects_cache) > 250:
+                            nearby_objects_cache.pop(key, None)
+                        if len(nearby_objects_cache) <= 200:
+                            break
+                if elements:
+                    return result
+                errors.append(f"{endpoint_url}: no mapped objects in radius")
+            except Exception as exc:
+                errors.append(f"{endpoint_url}: {type(exc).__name__}: {exc}")
+
+    stale = nearby_objects_cache.get(cache_key)
+    if stale:
+        data = dict(stale["data"])
+        data["cached"] = True
+        data["errors"] = errors
+        return data
+    return {"elements": [], "count": 0, "source": None, "cached": False, "errors": errors}
+
 road_response_cache = {}
 
 @app.get("/api/roads")
