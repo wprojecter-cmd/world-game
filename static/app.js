@@ -186,15 +186,17 @@ function makeTreeEntity(ds,lat,lon,tags,index){
  const height=Math.max(3,Math.min(24,Number.parseFloat(tags.height)||((Number.parseInt(tags.diameter_crown,10)||5)*1.4)));
  const radius=Math.max(1.1,Math.min(5.5,Number.parseFloat(tags.diameter_crown)||2.6));
  const base=Cesium.Cartesian3.fromDegrees(lon,lat,height*.18);
+ const treeOrientation=Cesium.Transforms.headingPitchRollQuaternion(base,new Cesium.HeadingPitchRoll(0,0,0));
  const crownColors=[Cesium.Color.fromCssColorString('#2c773d'),Cesium.Color.fromCssColorString('#438b47'),Cesium.Color.fromCssColorString('#5b9a50'),Cesium.Color.fromCssColorString('#347b50')];
  const crown=crownColors[index%crownColors.length];
- ds.entities.add({position:base,name:tags.name||'Tree',cylinder:{length:height*.36,topRadius:radius*.12,bottomRadius:radius*.16,material:Cesium.Color.fromCssColorString('#76503b'),outline:false},description:'Дерево по данным OpenStreetMap'});
+ ds.entities.add({position:base,orientation:treeOrientation,name:tags.name||'Tree',cylinder:{length:height*.36,topRadius:radius*.12,bottomRadius:radius*.16,material:Cesium.Color.fromCssColorString('#76503b'),outline:false},description:'Дерево по данным OpenStreetMap'});
  const crownBase=Cesium.Cartesian3.fromDegrees(lon,lat,height*.62);
+ const crownOrientation=Cesium.Transforms.headingPitchRollQuaternion(crownBase,new Cesium.HeadingPitchRoll(0,0,0));
  const type=tags.leaf_type==='needleleaved'||tags.leaf_type==='evergreen';
  if(type){
-  ds.entities.add({position:crownBase,name:tags.name||'Evergreen tree',cylinder:{length:height*.72,topRadius:0.12,bottomRadius:radius,material:crown,outline:false}});
+  ds.entities.add({position:crownBase,orientation:crownOrientation,name:tags.name||'Evergreen tree',cylinder:{length:height*.72,topRadius:0.12,bottomRadius:radius,material:crown,outline:false}});
  }else{
-  ds.entities.add({position:crownBase,name:tags.name||'Tree crown',ellipsoid:{radii:new Cesium.Cartesian3(radius,radius,Math.max(radius,height*.28)),material:crown,outline:false}});
+  ds.entities.add({position:crownBase,orientation:crownOrientation,name:tags.name||'Tree crown',ellipsoid:{radii:new Cesium.Cartesian3(radius,radius,Math.max(radius,height*.28)),material:crown,outline:false}});
  }
 }
 
@@ -210,10 +212,10 @@ function pointInForestRing(lat,lon,ring){
 function addTreesInsideForest(ds,way,origin,radius,startIndex){
  const ring=way.geometry||[];if(ring.length<4)return 0;
  const latRadius=radius/111320,lonRadius=radius/(111320*Math.max(.2,Math.cos(origin.lat*Math.PI/180)));
- const minLat=Math.max(origin.lat-latRadius,Math.min(...ring.map(p=>Number(p.lat)).filter(Number.isFinite)));
- const maxLat=Math.min(origin.lat+latRadius,Math.max(...ring.map(p=>Number(p.lat)).filter(Number.isFinite)));
- const minLon=Math.max(origin.lon-lonRadius,Math.min(...ring.map(p=>Number(p.lon)).filter(Number.isFinite)));
- const maxLon=Math.min(origin.lon+lonRadius,Math.max(...ring.map(p=>Number(p.lon)).filter(Number.isFinite)));
+ let ringMinLat=Infinity,ringMaxLat=-Infinity,ringMinLon=Infinity,ringMaxLon=-Infinity;
+ for(const p of ring){const plat=Number(p?.lat),plon=Number(p?.lon);if(!Number.isFinite(plat)||!Number.isFinite(plon))continue;ringMinLat=Math.min(ringMinLat,plat);ringMaxLat=Math.max(ringMaxLat,plat);ringMinLon=Math.min(ringMinLon,plon);ringMaxLon=Math.max(ringMaxLon,plon)}
+ const minLat=Math.max(origin.lat-latRadius,ringMinLat),maxLat=Math.min(origin.lat+latRadius,ringMaxLat);
+ const minLon=Math.max(origin.lon-lonRadius,ringMinLon),maxLon=Math.min(origin.lon+lonRadius,ringMaxLon);
  if(!(maxLat>minLat&&maxLon>minLon))return 0;
  const stepLat=Math.max(.00012,(maxLat-minLat)/24),stepLon=Math.max(.00012,(maxLon-minLon)/24);
  let created=0;
