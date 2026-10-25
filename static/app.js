@@ -197,6 +197,35 @@ function makeTreeEntity(ds,lat,lon,tags,index){
   ds.entities.add({position:crownBase,name:tags.name||'Tree crown',ellipsoid:{radii:new Cesium.Cartesian3(radius,radius,Math.max(radius,height*.28)),material:crown,outline:false}});
  }
 }
+
+function pointInForestRing(lat,lon,ring){
+ let inside=false;
+ for(let i=0,j=ring.length-1;i<ring.length;j=i++){
+  const yi=Number(ring[i]?.lat),xi=Number(ring[i]?.lon),yj=Number(ring[j]?.lat),xj=Number(ring[j]?.lon);
+  if(![yi,xi,yj,xj].every(Number.isFinite))continue;
+  if(((yi>lat)!==(yj>lat))&&(lon<(xj-xi)*(lat-yi)/(yj-yi||1e-12)+xi))inside=!inside;
+ }
+ return inside;
+}
+function addTreesInsideForest(ds,way,origin,radius,startIndex){
+ const ring=way.geometry||[];if(ring.length<4)return 0;
+ const latRadius=radius/111320,lonRadius=radius/(111320*Math.max(.2,Math.cos(origin.lat*Math.PI/180)));
+ const minLat=Math.max(origin.lat-latRadius,Math.min(...ring.map(p=>Number(p.lat)).filter(Number.isFinite)));
+ const maxLat=Math.min(origin.lat+latRadius,Math.max(...ring.map(p=>Number(p.lat)).filter(Number.isFinite)));
+ const minLon=Math.max(origin.lon-lonRadius,Math.min(...ring.map(p=>Number(p.lon)).filter(Number.isFinite)));
+ const maxLon=Math.min(origin.lon+lonRadius,Math.max(...ring.map(p=>Number(p.lon)).filter(Number.isFinite)));
+ if(!(maxLat>minLat&&maxLon>minLon))return 0;
+ const stepLat=Math.max(.00012,(maxLat-minLat)/24),stepLon=Math.max(.00012,(maxLon-minLon)/24);
+ let created=0;
+ for(let lat=minLat+stepLat*.5;lat<=maxLat&&created<80;lat+=stepLat){
+  for(let lon=minLon+stepLon*.5;lon<=maxLon&&created<80;lon+=stepLon){
+   if(worldObjectDistance({lat,lon},origin)>radius||!pointInForestRing(lat,lon,ring))continue;
+   makeTreeEntity(ds,lat,lon,{leaf_type:'broadleaved',height:6.5+((created*7+startIndex)%8)*1.4},startIndex+created);
+   created++;
+  }
+ }
+ return created;
+}
 function addBuildingFootprint(ds,way,origin,index){
  const points=(way.geometry||[]).filter(p=>Number.isFinite(+p.lat)&&Number.isFinite(+p.lon));
  if(points.length<4)return false;
@@ -219,11 +248,7 @@ function addBuildingFootprint(ds,way,origin,index){
  const footprint=ring;
  const hierarchy=new Cesium.PolygonHierarchy(positions);
  ds.entities.add({name:tags.name||tags['building:levels']?String(tags.name||'Building'): 'Building',description:'Источник: OpenStreetMap',polygon:{hierarchy,material:bodyColor.withAlpha(.96),outline:true,outlineColor:Cesium.Color.fromCssColorString('#514c45').withAlpha(.78),height:0,heightReference:Cesium.HeightReference.CLAMP_TO_GROUND,extrudedHeight:height,extrudedHeightReference:Cesium.HeightReference.RELATIVE_TO_GROUND,closeTop:true,closeBottom:true,arcType:Cesium.ArcType.GEODESIC}});
- const center=Cesium.BoundingSphere.fromPoints(positions).center;
- const centerCart=Cesium.Cartographic.fromCartesian(center);
- if(tags['roof:shape']!=='flat'){
-  ds.entities.add({name:'Building roof',position:Cesium.Cartesian3.fromRadians(centerCart.longitude,centerCart.latitude,height+.25),ellipsoid:{radii:new Cesium.Cartesian3(1,1,.4),material:roofColor}});
- }
+ ds.entities.add({name:(tags.name||'Building')+' roof',description:'Approximate roof surface from OpenStreetMap tags',polygon:{hierarchy,height:height+.05,heightReference:Cesium.HeightReference.RELATIVE_TO_GROUND,material:roofColor,outline:true,outlineColor:Cesium.Color.fromCssColorString('#514c45').withAlpha(.8),arcType:Cesium.ArcType.GEODESIC}});
  return true;
 }
 async function fetchNearbyWorldObjects(force=false){
@@ -258,8 +283,7 @@ async function fetchNearbyWorldObjects(force=false){
    if(item.type==='way'&&tags.building){if(addBuildingFootprint(ds,item,origin,buildings))buildings++}
    else if(item.type==='node'&&tags.natural==='tree'&&Number.isFinite(+item.lat)&&Number.isFinite(+item.lon)){makeTreeEntity(ds,+item.lat,+item.lon,tags,trees++)}
    else if(item.type==='way'&&tags.landuse==='forest'&&Array.isArray(item.geometry)&&item.geometry.length>3){
-    const count=Math.min(70,Math.max(12,Math.floor(item.geometry.length/8)));
-    for(let n=0;n<count;n++){const p=item.geometry[Math.floor(n*item.geometry.length/count)];if(p&&Number.isFinite(+p.lat)&&Number.isFinite(+p.lon))makeTreeEntity(ds,+p.lat,+p.lon,{leaf_type:'broadleaved',height:7+(n%6)*1.8},trees++)}
+    trees+=addTreesInsideForest(ds,item,origin,radius,trees);
    }
   });
   if(nearbyWorldObjects.dataSource)disposeNearbyWorldObjects();
