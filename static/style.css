@@ -29,8 +29,8 @@
 .flight-search-results{display:grid;gap:6px;max-height:190px;overflow:auto}.flight-search-results button{text-align:left;border:1px solid #ffffff16;background:#102338;color:#eaf4ff;border-radius:9px;padding:9px;cursor:pointer}.flight-search-results button small{display:block;color:#9fb6cc;margin-top:3px}
 .flight-point-actions,.flight-planner-actions{display:flex;gap:8px;margin:12px 0}.flight-point-actions button,.flight-planner-actions button{flex:1;min-width:0}
 .flight-point-card{padding:11px 12px;border:1px solid #ffffff18;border-radius:11px;background:#091927;margin:8px 0}.flight-point-card small{display:block;color:#70d7ff;letter-spacing:.1em;font-size:10px;margin-bottom:5px}.flight-point-card strong{display:block;font-size:12px;line-height:1.5;font-weight:500;color:#e2edf8}
-.flight-panorama{position:fixed;inset:0;z-index:10000;overflow:hidden;color:#f4f8ff;background:linear-gradient(160deg,#061321,#143d5a 55%,#061321)}
-.flight-panorama.hidden{display:none!important}
+.flight-panorama{position:fixed;inset:0;z-index:10000;overflow:hidden;color:#f4f8ff;background:transparent;pointer-events:none}
+.flight-panorama.hidden{display:none!important}.flight-panorama>*{pointer-events:auto}
 .flight-panorama:before{content:"";position:absolute;inset:0;background:radial-gradient(ellipse at 75% 20%,#ffc97555,transparent 30%),linear-gradient(180deg,#0a2033aa 0%,transparent 42%,#03101bcc 100%);pointer-events:none}
 .panorama-top,.panorama-bottom{position:absolute;z-index:2;left:18px;right:18px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:15px 18px;border:1px solid #ffffff22;border-radius:16px;background:#071522bb;backdrop-filter:blur(14px)}
 .panorama-top{top:18px}.panorama-top h2{font-size:clamp(20px,3vw,32px);margin:5px 0}.panorama-top p{margin:0;color:#b9ccdd;font-size:13px}.panorama-bottom{bottom:18px;font-size:12px;color:#c7d8e7}
