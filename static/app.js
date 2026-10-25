@@ -158,6 +158,118 @@ const freeCamBtn=document.createElement('button');freeCamBtn.id='free-camera-tog
 let cameraDragging=false,cameraLastX=0,cameraLastY=0;const canvas=()=>viewer?.scene?.canvas;function onCameraDown(e){if(e.button!==0||e.target.closest('button,input,select,textarea,.panel'))return;cameraDragging=true;cameraLastX=e.clientX;cameraLastY=e.clientY}function onCameraMove(e){if(!cameraDragging)return;const dx=e.clientX-cameraLastX,dy=e.clientY-cameraLastY;cameraLastX=e.clientX;cameraLastY=e.clientY;if(mode==='aircraft'&&!freeCamera){cameraHeading-=dx*.006;cameraPitch=Math.max(-1.05,Math.min(.15,cameraPitch+dy*.004));updateGroundAndCamera(false).catch(console.warn)}else if(freeCamera&&viewer){viewer.camera.rotateLeft(dx*.003);viewer.camera.rotateUp(dy*.003)}}function onCameraUp(){cameraDragging=false}document.addEventListener('pointerdown',onCameraDown);document.addEventListener('pointermove',onCameraMove);document.addEventListener('pointerup',onCameraUp);document.addEventListener('pointercancel',onCameraUp);document.addEventListener('wheel',e=>{if(mode==='aircraft'&&!freeCamera&&viewer){cameraDistance=Math.max(25,Math.min(500,cameraDistance+e.deltaY*.12));updateGroundAndCamera(false).catch(console.warn)}},{passive:true});
 window.addEventListener('keyup',e=>personKeys.delete(e.key.toLowerCase()));window.addEventListener('blur',()=>personKeys.clear());
 
+
+
+/* Nearby 3D buildings and trees (OpenStreetMap -> Cesium entities).
+   Shown in human mode and at aircraft altitudes up to 200 metres. */
+const nearbyWorldObjects = { dataSource:null, fetching:false, lastLat:NaN, lastLon:NaN, lastFetch:0 };
+const nearbyWorldOverpassHosts = [
+ 'https://overpass-api.de/api/interpreter',
+ 'https://overpass.kumi.systems/api/interpreter',
+ 'https://overpass.private.coffee/api/interpreter'
+];
+function disposeNearbyWorldObjects(){
+ if(!viewer||!nearbyWorldObjects.dataSource)return;
+ try{viewer.dataSources.remove(nearbyWorldObjects.dataSource,true)}catch(e){console.warn('Could not clear nearby buildings/trees:',e)}
+ nearbyWorldObjects.dataSource=null;
+}
+function worldObjectDistance(a,b){
+ const dy=(a.lat-b.lat)*111320;
+ const dx=(a.lon-b.lon)*111320*Math.cos((a.lat+b.lat)*Math.PI/360);
+ return Math.hypot(dx,dy);
+}
+function nearbyObjectColor(value,fallback){
+ if(typeof value!=='string'||!value.trim())return fallback;
+ try{return Cesium.Color.fromCssColorString(value.trim())||fallback}catch{return fallback}
+}
+function makeTreeEntity(ds,lat,lon,tags,index){
+ const height=Math.max(3,Math.min(24,Number.parseFloat(tags.height)||((Number.parseInt(tags.diameter_crown,10)||5)*1.4)));
+ const radius=Math.max(1.1,Math.min(5.5,Number.parseFloat(tags.diameter_crown)||2.6));
+ const base=Cesium.Cartesian3.fromDegrees(lon,lat,0);
+ const crownColors=[Cesium.Color.fromCssColorString('#2c773d'),Cesium.Color.fromCssColorString('#438b47'),Cesium.Color.fromCssColorString('#5b9a50'),Cesium.Color.fromCssColorString('#347b50')];
+ const crown=crownColors[index%crownColors.length];
+ ds.entities.add({position:base,name:tags.name||'Tree',cylinder:{length:height*.36,topRadius:radius*.12,bottomRadius:radius*.16,material:Cesium.Color.fromCssColorString('#76503b'),outline:false},description:'Дерево по данным OpenStreetMap'});
+ const crownBase=Cesium.Cartesian3.fromDegrees(lon,lat,height*.62);
+ const type=tags.leaf_type==='needleleaved'||tags.leaf_type==='evergreen';
+ if(type){
+  ds.entities.add({position:crownBase,name:tags.name||'Evergreen tree',cylinder:{length:height*.72,topRadius:0.12,bottomRadius:radius,material:crown,outline:false}});
+ }else{
+  ds.entities.add({position:crownBase,name:tags.name||'Tree crown',ellipsoid:{radii:new Cesium.Cartesian3(radius,radius,Math.max(radius,height*.28)),material:crown,outline:false}});
+ }
+}
+function addBuildingFootprint(ds,way,origin,index){
+ const points=(way.geometry||[]).filter(p=>Number.isFinite(+p.lat)&&Number.isFinite(+p.lon));
+ if(points.length<4)return false;
+ // Limit vertex count to keep Cesium responsive in dense city centers.
+ const stride=Math.max(1,Math.ceil(points.length/90)),reduced=points.filter((_,i)=>i%stride===0);
+ if(reduced.length<3)return false;
+ const ring=reduced.map(p=>new Cesium.Cartesian2(
+  (+p.lon-origin.lon)*111320*Math.cos(origin.lat*Math.PI/180),
+  (+p.lat-origin.lat)*111320
+ ));
+ const area=ring.reduce((acc,p,i)=>{const n=ring[(i+1)%ring.length];return acc+p.x*n.y-n.x*p.y},0);
+ if(Math.abs(area)<3)return false;
+ const tags=way.tags||{};
+ let height=Number.parseFloat(tags.height);
+ if(!Number.isFinite(height)||height<2||height>180)height=Math.max(3,Math.min(120,(Number.parseFloat(tags['building:levels'])||2.5)*3.1));
+ const roofColor=nearbyObjectColor(tags['roof:colour'],Cesium.Color.fromCssColorString('#b4a28c'));
+ const bodyColor=nearbyObjectColor(tags['building:colour']||tags.colour,
+  [Cesium.Color.fromCssColorString('#d5c8b5'),Cesium.Color.fromCssColorString('#c7c4ba'),Cesium.Color.fromCssColorString('#d3d0c6'),Cesium.Color.fromCssColorString('#b9afa0')][index%4]);
+ const positions=Cesium.Cartesian3.fromDegreesArray(points.map(p=>[+p.lon,+p.lat]).flat());
+ const footprint=ring;
+ const hierarchy=new Cesium.PolygonHierarchy(positions);
+ ds.entities.add({name:tags.name||tags['building:levels']?String(tags.name||'Building'): 'Building',description:'Источник: OpenStreetMap',polygon:{hierarchy,material:bodyColor.withAlpha(.96),outline:true,outlineColor:Cesium.Color.fromCssColorString('#514c45').withAlpha(.78),height:0,extrudedHeight:height,closeTop:true,closeBottom:true,arcType:Cesium.ArcType.GEODESIC}});
+ const center=Cesium.BoundingSphere.fromPoints(positions).center;
+ const centerCart=Cesium.Cartographic.fromCartesian(center);
+ if(tags['roof:shape']!=='flat'){
+  ds.entities.add({name:'Building roof',position:Cesium.Cartesian3.fromRadians(centerCart.longitude,centerCart.latitude,height+.25),ellipsoid:{radii:new Cesium.Cartesian3(1,1,.4),material:roofColor}});
+ }
+ return true;
+}
+async function fetchNearbyWorldObjects(force=false){
+ if(!viewer||nearbyWorldObjects.fetching)return;
+ const eligible=mode==='human'||(mode==='aircraft'&&Number(position.alt)<=200);
+ if(!eligible){if(nearbyWorldObjects.dataSource)disposeNearbyWorldObjects();return}
+ const now=Date.now();
+ const moved=!Number.isFinite(nearbyWorldObjects.lastLat)||worldObjectDistance({lat:nearbyWorldObjects.lastLat,lon:nearbyWorldObjects.lastLon},position)>220;
+ if(!force&&!moved&&now-nearbyWorldObjects.lastFetch<30000)return;
+ nearbyWorldObjects.fetching=true;nearbyWorldObjects.lastFetch=now;
+ const origin={lat:position.lat,lon:position.lon};
+ const radius=mode==='human'?280:Math.max(220,Math.min(900,250+Number(position.alt||0)*2));
+ const query='[out:json][timeout:18];(way["building"](around:'+Math.round(radius)+','+origin.lat.toFixed(6)+','+origin.lon.toFixed(6)+');node["natural"="tree"](around:'+Math.round(radius)+','+origin.lat.toFixed(6)+','+origin.lon.toFixed(6)+');way["landuse"="forest"](around:'+Math.round(radius)+','+origin.lat.toFixed(6)+','+origin.lon.toFixed(6)+'););out body geom;';
+ try{
+  let payload=null,lastError=null;
+  for(const host of nearbyWorldOverpassHosts){
+   try{
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
+    try{
+     const response=await fetch(host+'?data='+encodeURIComponent(query),{mode:'cors',signal:controller.signal,headers:{Accept:'application/json'}});
+     if(!response.ok)throw Error('Overpass HTTP '+response.status);
+     payload=await response.json();if(!Array.isArray(payload.elements))throw Error('Invalid Overpass response');break;
+    }finally{clearTimeout(timer)}
+   }catch(e){lastError=e;console.warn('Nearby 3D objects source failed:',host,e?.message||e)}
+  }
+  if(!payload)throw lastError||Error('No Overpass endpoint available');
+  const ds=new Cesium.CustomDataSource('nearby-3d-buildings-trees');
+  let buildings=0,trees=0;
+  const elements=payload.elements||[];
+  elements.forEach((item,index)=>{
+   const tags=item.tags||{};
+   if(item.type==='way'&&tags.building){if(addBuildingFootprint(ds,item,origin,buildings))buildings++}
+   else if(item.type==='node'&&tags.natural==='tree'&&Number.isFinite(+item.lat)&&Number.isFinite(+item.lon)){makeTreeEntity(ds,+item.lat,+item.lon,tags,trees++)}
+   else if(item.type==='way'&&tags.landuse==='forest'&&Array.isArray(item.geometry)&&item.geometry.length>3){
+    const count=Math.min(70,Math.max(12,Math.floor(item.geometry.length/8)));
+    for(let n=0;n<count;n++){const p=item.geometry[Math.floor(n*item.geometry.length/count)];if(p&&Number.isFinite(+p.lat)&&Number.isFinite(+p.lon))makeTreeEntity(ds,+p.lat,+p.lon,{leaf_type:'broadleaved',height:7+(n%6)*1.8},trees++)}
+   }
+  });
+  if(nearbyWorldObjects.dataSource)disposeNearbyWorldObjects();
+  if(buildings+trees>0){nearbyWorldObjects.dataSource=ds;await viewer.dataSources.add(ds);ds.show=true;console.info('Nearby 3D world objects loaded:',{buildings,trees,lat:origin.lat,lon:origin.lon,radius})}
+  else{console.info('No mapped buildings or trees found in the current radius.')}
+  nearbyWorldObjects.lastLat=origin.lat;nearbyWorldObjects.lastLon=origin.lon;
+ }catch(e){console.warn('Nearby 3D buildings/trees unavailable:',e?.message||e)}
+ finally{nearbyWorldObjects.fetching=false}
+}
+
 /* Lightweight road traffic: vehicles are assembled from simple low-poly Cesium boxes,
    and every vehicle advances only along a road geometry returned by OpenStreetMap. */
 const trafficState={roads:[],cars:[],lastFetch:0,lastLat:NaN,lastLon:NaN,fetching:false,active:false};
