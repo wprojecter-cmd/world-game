@@ -184,6 +184,8 @@ async function loadGlobalOsmBuildings(){
 const worldPayloadCache = (()=>{let dbPromise=null;function db(){if(!('indexedDB'in window))return Promise.resolve(null);if(!dbPromise)dbPromise=new Promise(resolve=>{const req=indexedDB.open('world-game-world-cache-v1',1);req.onupgradeneeded=()=>{if(!req.result.objectStoreNames.contains('payloads'))req.result.createObjectStore('payloads')};req.onsuccess=()=>resolve(req.result);req.onerror=()=>resolve(null)});return dbPromise}return {async get(key){try{const d=await db();if(!d)return null;return await new Promise(resolve=>{const r=d.transaction('payloads','readonly').objectStore('payloads').get(key);r.onsuccess=()=>resolve(r.result||null);r.onerror=()=>resolve(null)})}catch{return null}},async put(key,value){try{const d=await db();if(!d)return;await new Promise(resolve=>{const tx=d.transaction('payloads','readwrite');tx.objectStore('payloads').put({savedAt:Date.now(),value},key);tx.oncomplete=tx.onerror=()=>resolve()})}catch(e){console.warn('World cache storage unavailable',e)}}}})();
 function worldPayloadKey(lat,lon,radius){return [Math.round(lat*500)/500,Math.round(lon*500)/500,Math.round(radius/100)*100].join(':')}
 const nearbyWorldObjects = { dataSource:null, fetching:false, lastLat:NaN, lastLon:NaN, lastFetch:0 };
+// Keep rendered regions for the whole session so buildings/trees do not vanish on descent or when revisiting a tile.
+const nearbyWorldDataSources = new Map();
 const nearbyWorldOverpassHosts = [
  'https://overpass-api.de/api/interpreter',
  'https://overpass.kumi.systems/api/interpreter',
@@ -287,6 +289,12 @@ async function fetchNearbyWorldObjects(force=false){
  const query='[out:json][timeout:18];(way["building"](around:'+Math.round(radius)+','+origin.lat.toFixed(6)+','+origin.lon.toFixed(6)+');node["natural"="tree"](around:'+Math.round(radius)+','+origin.lat.toFixed(6)+','+origin.lon.toFixed(6)+');way["landuse"="forest"](around:'+Math.round(radius)+','+origin.lat.toFixed(6)+','+origin.lon.toFixed(6)+'););out body geom;';
  try{
   const cacheKey=worldPayloadKey(origin.lat,origin.lon,radius);
+  if(nearbyWorldDataSources.has(cacheKey)){
+   nearbyWorldObjects.dataSource=nearbyWorldDataSources.get(cacheKey);
+   nearbyWorldObjects.lastLat=origin.lat;nearbyWorldObjects.lastLon=origin.lon;
+   console.info('Nearby world region reused from rendered cache',cacheKey);
+   return;
+  }
   let payload=await worldPayloadCache.get(cacheKey),lastError=null;
   if(payload?.value&&Array.isArray(payload.value.elements)){payload=payload.value;console.info('World objects restored from local cache',cacheKey)}else payload=null;
   try{
@@ -324,9 +332,12 @@ async function fetchNearbyWorldObjects(force=false){
     trees+=addTreesInsideForest(ds,item,origin,radius,trees);
    }
   });
-  if(nearbyWorldObjects.dataSource)disposeNearbyWorldObjects();
-  if(buildings+trees>0){nearbyWorldObjects.dataSource=ds;await viewer.dataSources.add(ds);ds.show=true;console.info('Nearby 3D world objects loaded:',{buildings,trees,lat:origin.lat,lon:origin.lon,radius})}
-  else{console.info('No mapped buildings or trees found in the current radius.')}
+  if(buildings+trees>0){
+   // Do not remove the previous region: it remains rendered while the player climbs, descends or returns.
+   await viewer.dataSources.add(ds);ds.show=true;
+   nearbyWorldObjects.dataSource=ds;nearbyWorldDataSources.set(cacheKey,ds);
+   console.info('Nearby 3D world objects loaded and retained:',{buildings,trees,lat:origin.lat,lon:origin.lon,radius,regionsCached:nearbyWorldDataSources.size});
+  }else{console.info('No mapped buildings or trees found in the current radius.')}
   nearbyWorldObjects.lastLat=origin.lat;nearbyWorldObjects.lastLon=origin.lon;
  }catch(e){console.warn('Nearby 3D buildings/trees unavailable:',e?.message||e)}
  finally{nearbyWorldObjects.fetching=false}
