@@ -935,6 +935,34 @@ async def websocket_endpoint(ws: WebSocket, token: str = ""):
 async def explore_page():
     return FileResponse(os.path.join(APP_DIR, "static", "explore.html"))
 
+@app.get("/api/explore/weather-tiles/{layer}/{z}/{x}/{y}.png")
+async def explore_weather_tile(layer: str, z: int, x: int, y: int):
+    # OpenWeather map layers; API key stays server-side.
+    allowed = {"clouds_new", "precipitation_new", "wind_new", "temp_new", "pressure_new"}
+    if layer not in allowed:
+        raise HTTPException(404, "Неизвестный погодный слой.")
+    if not OPENWEATHER_API_KEY:
+        raise HTTPException(503, "Добавьте OPENWEATHER_API_KEY в Render.")
+    if not (0 <= z <= 18 and 0 <= x < 2 ** z and 0 <= y < 2 ** z):
+        raise HTTPException(400, "Недопустимые координаты тайла.")
+    try:
+        async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+            response = await client.get(
+                f"https://tile.openweathermap.org/map/{layer}/{z}/{x}/{y}.png",
+                params={"appid": OPENWEATHER_API_KEY},
+            )
+            if response.status_code in (401, 403):
+                raise HTTPException(503, "OpenWeather не разрешил этот погодный слой для текущего API-ключа.")
+            response.raise_for_status()
+            return Response(response.content, media_type="image/png",
+                            headers={"Cache-Control": "public, max-age=900"})
+    except HTTPException:
+        raise
+    except httpx.HTTPError as exc:
+        print(f"Explore weather tile failed layer={layer} z={z} x={x} y={y}: {exc}")
+        raise HTTPException(502, "Погодный слой временно недоступен.") from exc
+
+
 @app.get("/api/explore/weather")
 async def explore_weather(lat: float, lon: float):
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
