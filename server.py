@@ -928,3 +928,43 @@ async def websocket_endpoint(ws: WebSocket, token: str = ""):
                     await broadcast({"type":"presence","username":user.get("username","Игрок"),"online":False}, skip=uid)
                 except Exception:
                     pass
+
+
+# Additive Explore mode: separate from the existing game routes.
+@app.get("/explore")
+async def explore_page():
+    return FileResponse(os.path.join(APP_DIR, "static", "explore.html"))
+
+@app.get("/api/explore/weather")
+async def explore_weather(lat: float, lon: float):
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise HTTPException(422, "Координаты вне допустимого диапазона")
+    if not OPENWEATHER_API_KEY:
+        raise HTTPException(503, "Погода недоступна: добавьте OPENWEATHER_API_KEY в Render")
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
+            response = await client.get(
+                "https://api.openweathermap.org/data/2.5/weather",
+                params={"lat": lat, "lon": lon, "appid": OPENWEATHER_API_KEY, "units": "metric", "lang": "ru"},
+            )
+            response.raise_for_status()
+            data = response.json()
+        weather = (data.get("weather") or [{}])[0]
+        wind = data.get("wind") or {}
+        return {
+            "name": data.get("name") or f"{lat:.3f}, {lon:.3f}",
+            "lat": lat, "lon": lon,
+            "temperature": (data.get("main") or {}).get("temp"),
+            "humidity": (data.get("main") or {}).get("humidity"),
+            "description": weather.get("description", "нет данных"),
+            "main": weather.get("main", "Clear"),
+            "wind_speed": wind.get("speed", 0),
+            "wind_deg": wind.get("deg", 0),
+            "clouds": (data.get("clouds") or {}).get("all", 0),
+            "rain": (data.get("rain") or {}).get("1h", 0),
+            "snow": (data.get("snow") or {}).get("1h", 0),
+        }
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(502, "OpenWeather вернул ошибку: проверьте OPENWEATHER_API_KEY") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "Не удалось получить данные OpenWeather") from exc
