@@ -963,6 +963,23 @@ async def explore_weather_tile(layer: str, z: int, x: int, y: int):
         raise HTTPException(502, "Погодный слой временно недоступен.") from exc
 
 
+@app.get("/api/explore/country")
+async def explore_country(lat: float, lon: float):
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise HTTPException(400, "Недопустимые координаты.")
+    try:
+        async with httpx.AsyncClient(timeout=8, headers={"User-Agent": "WorldGameExplore/1.0"}) as client:
+            response = await client.get("https://nominatim.openstreetmap.org/reverse",
+                                        params={"format": "jsonv2", "lat": lat, "lon": lon, "zoom": 3, "addressdetails": 1})
+            response.raise_for_status()
+            data = response.json()
+        address = data.get("address", {})
+        return {"code": (address.get("country_code") or "").upper(), "name": address.get("country", "")}
+    except (httpx.HTTPError, ValueError) as exc:
+        print(f"Explore reverse geocoding failed: {exc}")
+        raise HTTPException(502, "Не удалось определить страну по координатам.") from exc
+
+
 @app.get("/api/explore/weather")
 async def explore_weather(lat: float, lon: float):
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
